@@ -128,13 +128,13 @@ class TestWebsocket {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"/", "http://localhost:${free.port.0}"})
+  @ValueSource(strings = {"/", "http://localhost:${free.port.1}"})
   @SneakyThrows
   void connectToANonSocksWebsocketServer(String from) {
     CountDownLatch latch = new CountDownLatch(2);
 
     final Integer serverPort =
-        TigerGlobalConfiguration.readIntegerOptional("free.port.0").orElseThrow();
+        TigerGlobalConfiguration.readIntegerOptional("free.port.1").orElseThrow();
     WebSocketServer server =
         new WebSocketServer(new InetSocketAddress("localhost", serverPort)) {
           @Override

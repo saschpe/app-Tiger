@@ -1,6 +1,29 @@
 # Changelog Tiger Test platform
 
-# Release 4.2.0
+# Release 4.2.2
+
+## Features
+
+* TGR-2075: LDAP converter: Extended protocol operation fields are now extracted and rendered in the HTML view:
+    - **SearchRequest**: `requestedAttributes` - list of attribute names to return (rendered as HTML list)
+    - **AbandonRequest**: `abandonedMessageId` - the message ID being abandoned
+    - **BindRequest**: `saslMechanism` and `saslCredentials` for SASL authentication
+    - **ExtendedRequest/Response**: `requestName` and `responseName` for generic extended operations
+    - **ResultResponse**: `referrals` - list of referral URLs (rendered as HTML list)
+
+## Bugfixes
+
+* TGR-2063: LDAP: Suppress unnecessary log output of LDAP parsing
+* TGR-2067: LDAP: Fix rendering of fields, e.g. Message ID
+* TGR-2068: Avoid NullPointerException caused by race condition when creating a binary channel.
+
+## Bugfixes
+
+* TGR-2081: Fix of CORS bug in tracing endpoint configuration of tiger proxy.
+* TGR-2082: Fix for message retriever. It is supposed to only check the longest prefix of fully parsed messages
+  available, but was given the whole history including not fully parsed messages.
+
+# Release 4.2.1
 
 ## Features
 

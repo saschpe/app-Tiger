@@ -150,10 +150,9 @@ public class RbelMessageHistory {
   }
 
   public synchronized List<RbelElement> getMessageList() {
-    return messageHistory.values().stream()
-        .filter(e -> !e.hasFacet(RbelNonTransmissionMarkerFacet.class))
-        .takeWhile(msg -> msg.getConversionPhase().isFinished())
-        .toList();
+    return getLongestFinishedMessagesPrefix(
+        messageHistory.values().stream()
+            .filter(e -> !e.hasFacet(RbelNonTransmissionMarkerFacet.class)));
   }
 
   public synchronized Optional<RbelElement> findMessageByUuid(String uuid) {
@@ -295,6 +294,10 @@ public class RbelMessageHistory {
     return getPreviousMessages(targetElement, additionalFilter).findFirst();
   }
 
+  public static List<RbelElement> getLongestFinishedMessagesPrefix(Stream<RbelElement> elements) {
+    return elements.takeWhile(e -> e.getConversionPhase().isFinished()).toList();
+  }
+
   public interface Facade {
 
     RbelElement getFirst();
@@ -408,10 +411,15 @@ public class RbelMessageHistory {
     @Override
     public Collection<RbelElement> getMessagesAfter(RbelElement element, boolean includeElement) {
       synchronized (RbelMessageHistory.this) {
-        return element
-            .getSequenceNumber()
-            .map(seqNr -> messageHistory.tailMap(seqNr, includeElement).values())
-            .orElseGet(messageHistory::values);
+        var candidates =
+            element
+                .getSequenceNumber()
+                .map(seqNr -> messageHistory.tailMap(seqNr, includeElement).values())
+                .orElseGet(messageHistory::values);
+        if (!allowUnparsedMessagesToAppearInFacade) {
+          candidates = getLongestFinishedMessagesPrefix(candidates.stream());
+        }
+        return candidates;
       }
     }
 

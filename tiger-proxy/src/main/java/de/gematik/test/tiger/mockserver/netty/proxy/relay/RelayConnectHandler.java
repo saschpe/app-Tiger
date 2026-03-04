@@ -21,39 +21,29 @@
 package de.gematik.test.tiger.mockserver.netty.proxy.relay;
 
 import static de.gematik.test.tiger.mockserver.exception.ExceptionHandling.connectionClosedException;
+import static de.gematik.test.tiger.mockserver.httpclient.NettyHttpClient.REMOTE_SOCKET;
 import static de.gematik.test.tiger.mockserver.mock.action.http.HttpActionHandler.getRemoteAddress;
-import static de.gematik.test.tiger.mockserver.model.HttpProtocol.HTTP_1_1;
-import static de.gematik.test.tiger.mockserver.model.HttpProtocol.HTTP_2;
-import static de.gematik.test.tiger.mockserver.netty.unification.PortUnificationHandler.*;
-import static de.gematik.test.tiger.mockserver.socket.tls.SniHandler.PREFERRED_UPSTREAM_KEY_ALGORITHM;
-import static de.gematik.test.tiger.mockserver.socket.tls.SniHandler.SERVER_IDENTITY;
-import static de.gematik.test.tiger.mockserver.socket.tls.SniHandler.getAlpnProtocol;
+import static de.gematik.test.tiger.mockserver.netty.HttpRequestHandler.PROXYING;
+import static de.gematik.test.tiger.mockserver.netty.unification.PortUnificationHandler.isSslEnabledUpstream;
 
-import de.gematik.test.tiger.common.pki.TigerPkiIdentity;
 import de.gematik.test.tiger.mockserver.configuration.MockServerConfiguration;
-import de.gematik.test.tiger.mockserver.model.HttpRequest;
 import de.gematik.test.tiger.mockserver.netty.MockServer;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
+import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.socket.nio.NioSocketChannel;
-import io.netty.handler.codec.http.HttpClientCodec;
-import io.netty.handler.codec.http.HttpContentDecompressor;
-import io.netty.handler.codec.http.HttpObjectAggregator;
-import io.netty.handler.codec.http.HttpServerCodec;
-import io.netty.handler.codec.http2.*;
-import io.netty.handler.logging.LogLevel;
-import io.netty.handler.ssl.SslContext;
-import io.netty.handler.ssl.SslHandler;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-import lombok.val;
-import org.apache.commons.lang3.tuple.Pair;
 
-/*
+/**
+ * Abstract handler for CONNECT requests. Handles the common logic for setting up tunnels, while
+ * protocol-specific details (HTTP codecs, responses) are delegated to subclasses.
+ *
  * @author jamesdbloom
  */
 @Sharable
@@ -63,12 +53,13 @@ public abstract class RelayConnectHandler<T> extends SimpleChannelInboundHandler
   public static final String PROXIED = "PROXIED_";
   public static final String PROXIED_SECURE = PROXIED + "SECURE_";
   public static final String PROXIED_RESPONSE = "PROXIED_RESPONSE_";
-  private final MockServerConfiguration configuration;
-  private final MockServer server;
+
+  @Getter protected final MockServerConfiguration configuration;
+  @Getter protected final MockServer server;
   protected final String host;
   protected final int port;
 
-  public RelayConnectHandler(
+  protected RelayConnectHandler(
       MockServerConfiguration configuration, MockServer server, String host, int port) {
     this.configuration = configuration;
     this.server = server;
@@ -78,160 +69,28 @@ public abstract class RelayConnectHandler<T> extends SimpleChannelInboundHandler
 
   @Override
   public void channelRead0(final ChannelHandlerContext proxyClientCtx, final T request) {
-    Bootstrap bootstrap =
-        new Bootstrap()
-            .group(proxyClientCtx.channel().eventLoop())
-            .channel(NioSocketChannel.class)
-            .handler(
-                new ChannelInboundHandlerAdapter() {
-                  @Override
-                  public void channelActive(final ChannelHandlerContext mockServerCtx) {
-                    if (isSslEnabledUpstream(proxyClientCtx.channel())) {
-                      mockServerCtx
-                          .writeAndFlush(
-                              Unpooled.copiedBuffer(
-                                  (PROXIED_SECURE + host + ":" + port)
-                                      .getBytes(StandardCharsets.UTF_8)))
-                          .awaitUninterruptibly();
-                    } else {
-                      mockServerCtx
-                          .writeAndFlush(
-                              Unpooled.copiedBuffer(
-                                  (PROXIED + host + ":" + port).getBytes(StandardCharsets.UTF_8)))
-                          .awaitUninterruptibly();
-                    }
-                  }
+    InetSocketAddress forwardProxy = getRemoteAddress(proxyClientCtx);
+    if (forwardProxy == null) {
+      setupLocalTunnel(proxyClientCtx, request);
+      return;
+    }
 
-                  @Override
-                  public void channelRead(ChannelHandlerContext mockServerCtx, Object msg) {
-                    if (msg instanceof ByteBuf) {
-                      byte[] bytes = ByteBufUtil.getBytes((ByteBuf) msg);
-                      if (new String(bytes, StandardCharsets.UTF_8).startsWith(PROXIED_RESPONSE)) {
-                        proxyClientCtx
-                            .writeAndFlush(successResponse(request))
-                            .addListener(
-                                (ChannelFutureListener)
-                                    channelFuture -> {
-                                      removeCodecSupport(proxyClientCtx);
-                                      val httpProtocol =
-                                          getAlpnProtocol(proxyClientCtx).orElse(HTTP_1_1);
+    connectToForwardProxy(proxyClientCtx, request, forwardProxy);
+  }
 
-                                      // upstream (to MockServer)
-                                      ChannelPipeline pipelineToMockServer =
-                                          mockServerCtx.channel().pipeline();
-
-                                      if (isSslEnabledDownstream(proxyClientCtx.channel())) {
-                                        log.info(
-                                            "Adding SSL Handler in"
-                                                + " RelayConnectHandler.channelRead");
-                                        pipelineToMockServer.addLast(
-                                            server
-                                                .getClientSslContextFactory()
-                                                .createClientSslContext(
-                                                    httpProtocol,
-                                                    ((HttpRequest) request)
-                                                        .socketAddressFromHostHeader()
-                                                        .getHostName())
-                                                .newHandler(mockServerCtx.alloc(), host, port));
-                                      }
-
-                                      pipelineToMockServer.addLast(
-                                          new HttpClientCodec(
-                                              configuration.maxInitialLineLength(),
-                                              configuration.maxHeaderSize(),
-                                              configuration.maxChunkSize()));
-                                      pipelineToMockServer.addLast(new HttpContentDecompressor());
-                                      pipelineToMockServer.addLast(
-                                          new HttpObjectAggregator(Integer.MAX_VALUE));
-
-                                      pipelineToMockServer.addLast(
-                                          new DownstreamProxyRelayHandler(
-                                              proxyClientCtx.channel()));
-
-                                      // downstream (to proxy client)
-                                      ChannelPipeline pipelineToProxyClient =
-                                          proxyClientCtx.channel().pipeline();
-
-                                      if (isSslEnabledUpstream(proxyClientCtx.channel())
-                                          && pipelineToProxyClient.get(SslHandler.class) == null) {
-                                        final Pair<SslContext, TigerPkiIdentity> serverSslContext =
-                                            server
-                                                .getServerSslContextFactory()
-                                                .createServerSslContext(
-                                                    host,
-                                                    proxyClientCtx
-                                                        .channel()
-                                                        .attr(PREFERRED_UPSTREAM_KEY_ALGORITHM)
-                                                        .get());
-                                        channelFuture
-                                            .channel()
-                                            .attr(SERVER_IDENTITY)
-                                            .set(serverSslContext.getValue());
-                                        pipelineToProxyClient.addLast(
-                                            serverSslContext
-                                                .getKey()
-                                                .newHandler(proxyClientCtx.alloc()));
-                                      }
-
-                                      if (httpProtocol == HTTP_2) {
-                                        final Http2Connection connection =
-                                            new DefaultHttp2Connection(true);
-                                        final HttpToHttp2ConnectionHandlerBuilder
-                                            http2ConnectionHandlerBuilder =
-                                                new HttpToHttp2ConnectionHandlerBuilder()
-                                                    .frameListener(
-                                                        new DelegatingDecompressorFrameListener(
-                                                            connection,
-                                                            new InboundHttp2ToHttpAdapterBuilder(
-                                                                    connection)
-                                                                .maxContentLength(Integer.MAX_VALUE)
-                                                                .propagateSettings(true)
-                                                                .validateHttpHeaders(false)
-                                                                .build()));
-                                        if (log.isTraceEnabled()) {
-                                          http2ConnectionHandlerBuilder.frameLogger(
-                                              new Http2FrameLogger(
-                                                  LogLevel.TRACE,
-                                                  RelayConnectHandler.class.getName()));
-                                        }
-                                        pipelineToProxyClient.addLast(
-                                            http2ConnectionHandlerBuilder
-                                                .connection(connection)
-                                                .build());
-                                      } else {
-                                        pipelineToProxyClient.addLast(
-                                            new HttpServerCodec(
-                                                configuration.maxInitialLineLength(),
-                                                configuration.maxHeaderSize(),
-                                                configuration.maxChunkSize()));
-                                        pipelineToProxyClient.addLast(
-                                            new HttpContentDecompressor());
-                                        pipelineToProxyClient.addLast(
-                                            new HttpObjectAggregator(Integer.MAX_VALUE));
-                                      }
-
-                                      pipelineToProxyClient.addLast(
-                                          new UpstreamProxyRelayHandler(
-                                              server,
-                                              proxyClientCtx.channel(),
-                                              mockServerCtx.channel()));
-                                    });
-                      } else {
-                        mockServerCtx.fireChannelRead(msg);
-                      }
-                    }
-                  }
-                });
-
-    final InetSocketAddress remoteSocket = getDownstreamSocket(proxyClientCtx);
-    bootstrap
-        .connect(remoteSocket)
+  private void connectToForwardProxy(
+      ChannelHandlerContext proxyClientCtx, T request, InetSocketAddress forwardProxy) {
+    new Bootstrap()
+        .group(proxyClientCtx.channel().eventLoop())
+        .channel(NioSocketChannel.class)
+        .handler(createForwardProxyHandler(proxyClientCtx, request))
+        .connect(forwardProxy)
         .addListener(
             (ChannelFutureListener)
                 future -> {
                   if (!future.isSuccess()) {
                     failure(
-                        "Connection failed to " + remoteSocket,
+                        "Connection failed to " + forwardProxy,
                         future.cause(),
                         proxyClientCtx,
                         failureResponse(request));
@@ -239,13 +98,84 @@ public abstract class RelayConnectHandler<T> extends SimpleChannelInboundHandler
                 });
   }
 
-  private InetSocketAddress getDownstreamSocket(ChannelHandlerContext ctx) {
-    InetSocketAddress remoteAddress = getRemoteAddress(ctx);
-    if (remoteAddress != null) {
-      return remoteAddress;
-    } else {
-      return new InetSocketAddress(server.getLocalPort());
+  /**
+   * Creates a handler for communication with the forward proxy using the PROXIED binary protocol.
+   */
+  protected ChannelInboundHandlerAdapter createForwardProxyHandler(
+      ChannelHandlerContext proxyClientCtx, T request) {
+    return new ForwardProxyHandler(proxyClientCtx, request);
+  }
+
+  /** Handles communication with a forward proxy using the PROXIED binary protocol. */
+  private class ForwardProxyHandler extends ChannelInboundHandlerAdapter {
+    private final ChannelHandlerContext proxyClientCtx;
+    private final T request;
+
+    ForwardProxyHandler(ChannelHandlerContext proxyClientCtx, T request) {
+      this.proxyClientCtx = proxyClientCtx;
+      this.request = request;
     }
+
+    @Override
+    public void channelActive(ChannelHandlerContext forwardProxyCtx) {
+      String message =
+          (isSslEnabledUpstream(proxyClientCtx.channel()) ? PROXIED_SECURE : PROXIED)
+              + host
+              + ":"
+              + port;
+
+      forwardProxyCtx
+          .writeAndFlush(Unpooled.copiedBuffer(message.getBytes(StandardCharsets.UTF_8)))
+          .awaitUninterruptibly();
+    }
+
+    @Override
+    public void channelRead(ChannelHandlerContext forwardProxyCtx, Object msg) {
+      if (!(msg instanceof ByteBuf byteBuf)) {
+        forwardProxyCtx.fireChannelRead(msg);
+        return;
+      }
+
+      String response = new String(ByteBufUtil.getBytes(byteBuf), StandardCharsets.UTF_8);
+      if (!response.startsWith(PROXIED_RESPONSE)) {
+        forwardProxyCtx.fireChannelRead(msg);
+        return;
+      }
+
+      proxyClientCtx
+          .writeAndFlush(successResponse(request))
+          .addListener(
+              (ChannelFutureListener)
+                  future -> {
+                    if (future.isSuccess()) {
+                      configureRelayPipelines(proxyClientCtx, forwardProxyCtx, request, future);
+                    }
+                  });
+    }
+  }
+
+  /**
+   * Handles the case where no forward proxy is configured. Sets up local routing and sends success
+   * response to the client, then prepares the pipeline for subsequent traffic.
+   */
+  private void setupLocalTunnel(ChannelHandlerContext proxyClientCtx, T request) {
+    InetSocketAddress targetSocket = InetSocketAddress.createUnresolved(host, port);
+    proxyClientCtx.channel().attr(REMOTE_SOCKET).set(targetSocket);
+    proxyClientCtx.channel().attr(PROXYING).set(Boolean.TRUE);
+
+    log.trace("Setting up local tunnel for {}:{}", host, port);
+
+    proxyClientCtx
+        .writeAndFlush(successResponse(request))
+        .addListener(
+            (ChannelFutureListener)
+                channelFuture -> {
+                  if (channelFuture.isSuccess()) {
+                    prepareForSubsequentTraffic(proxyClientCtx);
+                  } else {
+                    log.error("Failed to send success response to client", channelFuture.cause());
+                  }
+                });
   }
 
   @Override
@@ -257,7 +187,7 @@ public abstract class RelayConnectHandler<T> extends SimpleChannelInboundHandler
         failureResponse(null));
   }
 
-  private void failure(
+  protected void failure(
       String message, Throwable cause, ChannelHandlerContext ctx, Object response) {
     if (connectionClosedException(cause)) {
       log.error(message, cause);
@@ -269,22 +199,33 @@ public abstract class RelayConnectHandler<T> extends SimpleChannelInboundHandler
     }
   }
 
+  // ========== Abstract methods to be implemented by protocol-specific subclasses ==========
+
+  /** Removes protocol-specific codecs from the pipeline. */
   protected abstract void removeCodecSupport(ChannelHandlerContext ctx);
 
+  /** Creates a success response appropriate for the protocol. */
   protected abstract Object successResponse(Object request);
 
+  /** Creates a failure response appropriate for the protocol. */
   protected abstract Object failureResponse(Object request);
+
+  /** Configures relay pipelines after successful connection to forward proxy. */
+  protected abstract void configureRelayPipelines(
+      ChannelHandlerContext proxyClientCtx,
+      ChannelHandlerContext forwardProxyCtx,
+      T request,
+      ChannelFuture clientFuture);
+
+  /** Prepares the pipeline for subsequent traffic after local tunnel setup. */
+  protected abstract void prepareForSubsequentTraffic(ChannelHandlerContext ctx);
+
+  // ========== Utility methods for subclasses ==========
 
   protected void removeHandler(
       ChannelPipeline pipeline, Class<? extends ChannelHandler> handlerType) {
     if (pipeline.get(handlerType) != null) {
       pipeline.remove(handlerType);
-    }
-  }
-
-  protected void removeHandler(ChannelPipeline pipeline, ChannelHandler channelHandler) {
-    if (pipeline.toMap().containsValue(channelHandler)) {
-      pipeline.remove(channelHandler);
     }
   }
 }

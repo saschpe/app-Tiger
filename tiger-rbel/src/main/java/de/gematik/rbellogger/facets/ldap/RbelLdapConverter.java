@@ -24,12 +24,14 @@ import de.gematik.rbellogger.RbelConversionExecutor;
 import de.gematik.rbellogger.RbelConverterPlugin;
 import de.gematik.rbellogger.converter.ConverterInfo;
 import de.gematik.rbellogger.data.RbelElement;
+import de.gematik.rbellogger.data.core.RbelListFacet;
 import de.gematik.rbellogger.data.core.RbelRequestFacet;
 import de.gematik.rbellogger.data.core.RbelResponseFacet;
 import de.gematik.rbellogger.data.core.RbelRootFacet;
 import de.gematik.rbellogger.exceptions.RbelConversionException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
@@ -191,7 +193,9 @@ public class RbelLdapConverter extends RbelConverterPlugin {
             .sizeLimit(wrapValue(String.valueOf(searchReq.getSizeLimit()), protocolOpElement))
             .timeLimit(wrapValue(String.valueOf(searchReq.getTimeLimit()), protocolOpElement))
             .typesOnly(wrapValue(String.valueOf(searchReq.getTypesOnly()), protocolOpElement))
-            .filter(wrapValue(searchReq.getFilter().toString(), protocolOpElement));
+            .filter(wrapValue(searchReq.getFilter().toString(), protocolOpElement))
+            .requestedAttributes(
+                createAttributesListElement(searchReq.getAttributes(), protocolOpElement));
       }
       case BIND_REQUEST -> {
         BindRequest bindReq = (BindRequest) ldapMessage;
@@ -200,6 +204,12 @@ public class RbelLdapConverter extends RbelConverterPlugin {
             .version(wrapValue(String.valueOf(version), protocolOpElement))
             .name(wrapValue(bindReq.getName(), protocolOpElement))
             .simple(wrapValue(String.valueOf(bindReq.isSimple()), protocolOpElement));
+        if (!bindReq.isSimple()) {
+          builder.saslMechanism(wrapValue(bindReq.getSaslMechanism(), protocolOpElement));
+          if (bindReq.getCredentials() != null) {
+            builder.saslCredentials(wrapValue(bindReq.getCredentials(), protocolOpElement));
+          }
+        }
       }
       case COMPARE_REQUEST -> {
         CompareRequest compareReq = (CompareRequest) ldapMessage;
@@ -219,6 +229,10 @@ public class RbelLdapConverter extends RbelConverterPlugin {
         CancelRequest cancelReq = (CancelRequest) ldapMessage;
         builder.cancelId(wrapValue(cancelReq.getCancelId(), protocolOpElement));
       }
+      case ABANDON_REQUEST -> {
+        AbandonRequest abandonReq = (AbandonRequest) ldapMessage;
+        builder.abandonedMessageId(wrapValue(abandonReq.getAbandoned(), protocolOpElement));
+      }
       case WHO_AM_I_RESPONSE -> {
         WhoAmIResponse whoAmIResp = (WhoAmIResponse) ldapMessage;
         builder.authzId(wrapValue(whoAmIResp.getAuthzId(), protocolOpElement));
@@ -226,6 +240,16 @@ public class RbelLdapConverter extends RbelConverterPlugin {
       case PASSWORD_MODIFY_RESPONSE -> {
         PasswordModifyResponse pwdModResp = (PasswordModifyResponse) ldapMessage;
         builder.genPassword(wrapValue(pwdModResp.getGenPassword(), protocolOpElement));
+      }
+      case EXTENDED_REQUEST -> {
+        ExtendedRequest extReq = (ExtendedRequest) ldapMessage;
+        builder.requestName(wrapValue(extReq.getRequestName(), protocolOpElement));
+      }
+      case EXTENDED_RESPONSE -> {
+        ExtendedResponse extResp = (ExtendedResponse) ldapMessage;
+        if (extResp.getResponseName() != null && !extResp.getResponseName().isBlank()) {
+          builder.responseName(wrapValue(extResp.getResponseName(), protocolOpElement));
+        }
       }
       default -> {}
     }
@@ -297,6 +321,11 @@ public class RbelLdapConverter extends RbelConverterPlugin {
 
   private static RbelElement wrapValue(Object value, RbelElement parent) {
     return RbelElement.wrap(null, parent, value);
+  }
+
+  private RbelElement createAttributesListElement(
+      List<String> attributeNames, RbelElement parentElement) {
+    return createStringListElement(attributeNames, parentElement);
   }
 
   private String getShortProtocolOpDesc(
@@ -636,6 +665,21 @@ public class RbelLdapConverter extends RbelConverterPlugin {
           .resultCode(wrapValue(ldapResult.getResultCode().name(), protocolOpElement))
           .matchedDN(wrapValue(ldapResult.getMatchedDn().getName(), protocolOpElement))
           .diagnosticMessage(wrapValue(ldapResult.getDiagnosticMessage(), protocolOpElement));
+
+      // Extract referrals if present
+      Referral referral = ldapResult.getReferral();
+      if (referral != null && referral.getLdapUrls() != null && !referral.getLdapUrls().isEmpty()) {
+        List<String> referralUrls = new ArrayList<>(referral.getLdapUrls());
+        builder.referrals(createStringListElement(referralUrls, protocolOpElement));
+      }
     }
+  }
+
+  private RbelElement createStringListElement(List<String> values, RbelElement parentElement) {
+    RbelElement listElement = new RbelElement(null, parentElement);
+    List<RbelElement> childNodes =
+        values.stream().map(value -> wrapValue(value, listElement)).toList();
+    listElement.addFacet(new RbelListFacet(childNodes));
+    return listElement;
   }
 }

@@ -20,6 +20,7 @@
  */
 package de.gematik.test.tiger.mockserver.httpclient;
 
+import static de.gematik.test.tiger.mockserver.httpclient.BinaryBridgeHandler.INCOMING_CHANNEL;
 import static de.gematik.test.tiger.mockserver.httpclient.NettyHttpClient.ERROR_IF_CHANNEL_CLOSED_WITHOUT_RESPONSE;
 import static de.gematik.test.tiger.mockserver.httpclient.NettyHttpClient.REMOTE_SOCKET;
 import static de.gematik.test.tiger.mockserver.httpclient.NettyHttpClient.RESPONSE_FUTURE;
@@ -65,13 +66,23 @@ public class ClientBootstrapFactory {
   private final EventLoopGroup eventLoop;
   @Getter private final ReusableChannelMap channelMap = new ReusableChannelMap();
 
+  /** Groups channel configuration parameters to reduce method parameter count. */
+  @Builder
+  public record ChannelConfig(
+      boolean isSecure,
+      boolean errorIfChannelClosedWithoutResponse,
+      @Nullable CompletableFuture<Message> responseFuture,
+      @Nullable Long timeoutInMilliseconds,
+      @Nullable EventLoopGroup eventLoopGroup,
+      HttpClientInitializer clientInitializer) {}
+
   /**
    * Method is private and should not be used directly.
    *
    * <p>It has many arguments which can be nullable. By using the builder we dont need to specify
    * all arguments and sane defaults are assumed when possible
    *
-   * <p>Use ClientBootstrapFactor.builder()..connectToChannel() to create a Channel
+   * <p>Use ClientBootstrapFactor.configureChannel()..connectToChannel() to create a Channel
    */
   @Builder(builderMethodName = "configureChannel", buildMethodName = "connectToChannel")
   private ChannelFuture createOrReuseChannel(
@@ -87,92 +98,155 @@ public class ClientBootstrapFactory {
       @Nullable Long timeoutInMilliseconds,
       @Nullable EventLoopGroup eventLoopGroup) {
 
-    ChannelFuture existingChannel = null;
+    val resolvedParams = resolveChannelParameters(requestInfo, incomingChannel, remoteAddress);
+
+    val channelToReuse =
+        Optional.ofNullable(requestInfo).map(channelMap::getChannelToReuse).orElse(null);
+    if (channelToReuse != null) {
+      return reuseExistingChannel(
+          channelToReuse, resolvedParams.incomingChannel(), responseFuture, onReuseListener);
+    }
+
+    val config =
+        ChannelConfig.builder()
+            .isSecure(isSecure)
+            .errorIfChannelClosedWithoutResponse(errorIfChannelClosedWithoutResponse)
+            .responseFuture(responseFuture)
+            .timeoutInMilliseconds(timeoutInMilliseconds)
+            .eventLoopGroup(eventLoopGroup)
+            .clientInitializer(clientInitializer)
+            .build();
+
+    return createNewChannel(
+        config,
+        resolvedParams.incomingChannel(),
+        resolvedParams.remoteAddress(),
+        onCreationListener);
+  }
+
+  private record ResolvedChannelParams(Channel incomingChannel, InetSocketAddress remoteAddress) {}
+
+  private ResolvedChannelParams resolveChannelParameters(
+      @Nullable RequestInfo<?> requestInfo,
+      @Nullable Channel incomingChannel,
+      @Nullable InetSocketAddress remoteAddress) {
     if (requestInfo != null) {
-      existingChannel =
-          channelMap.getChannelToReuse(
-              requestInfo); // if there is no request info then we are opening a new channel
-      remoteAddress = requestInfo.retrieveActualRemoteAddress();
-      incomingChannel = requestInfo.getIncomingChannel();
+      return new ResolvedChannelParams(
+          requestInfo.getIncomingChannel(), requestInfo.retrieveActualRemoteAddress());
+    }
+    return new ResolvedChannelParams(incomingChannel, remoteAddress);
+  }
+
+  private ChannelFuture reuseExistingChannel(
+      ChannelFuture existingChannel,
+      Channel incomingChannel,
+      @Nullable CompletableFuture<Message> responseFuture,
+      @Nullable ChannelFutureListener onReuseListener) {
+    log.trace("reusing already existing channel");
+
+    existingChannel.addListener(
+        (ChannelFutureListener)
+            future -> {
+              if (future.isSuccess()) {
+                // Complete any old response future before setting the new one
+                Optional.ofNullable(future.channel().attr(RESPONSE_FUTURE).get())
+                    .ifPresent(oldFuture -> oldFuture.complete(null));
+
+                future.channel().attr(RESPONSE_FUTURE).set(responseFuture);
+                incomingChannel.attr(BinaryBridgeHandler.OUTGOING_CHANNEL).set(future.channel());
+              }
+            });
+
+    if (onReuseListener != null) {
+      existingChannel.addListener(onReuseListener);
+    }
+    return existingChannel;
+  }
+
+  private ChannelFuture createNewChannel(
+      ChannelConfig config,
+      Channel incomingChannel,
+      InetSocketAddress remoteAddress,
+      @Nullable ChannelFutureListener onCreationListener) {
+    log.trace("creating a new channel");
+
+    val timeout = resolveTimeout(config.timeoutInMilliseconds());
+    val effectiveEventLoopGroup =
+        config.eventLoopGroup() != null ? config.eventLoopGroup() : eventLoop;
+
+    var channelFuture =
+        createBootstrap(config, incomingChannel, remoteAddress, timeout, effectiveEventLoopGroup)
+            .connect(remoteAddress);
+    registerNewChannel(channelFuture, incomingChannel, remoteAddress, onCreationListener);
+
+    return channelFuture;
+  }
+
+  private Integer resolveTimeout(@Nullable Long timeoutInMilliseconds) {
+    if (timeoutInMilliseconds != null) {
+      return timeoutInMilliseconds.intValue();
+    }
+    val configuredTimeout = configuration.socketConnectionTimeoutInMillis();
+    return configuredTimeout != null ? configuredTimeout.intValue() : null;
+  }
+
+  private Bootstrap createBootstrap(
+      ChannelConfig config,
+      Channel incomingChannel,
+      InetSocketAddress remoteAddress,
+      @Nullable Integer timeout,
+      EventLoopGroup effectiveEventLoopGroup) {
+
+    int loopCounter =
+        incomingChannel.hasAttr(LOOP_COUNTER) ? incomingChannel.attr(LOOP_COUNTER).get() + 1 : 0;
+
+    var bootstrap =
+        new Bootstrap()
+            .group(effectiveEventLoopGroup)
+            .channel(NioSocketChannel.class)
+            .option(ChannelOption.AUTO_READ, true)
+            .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
+            .option(
+                ChannelOption.WRITE_BUFFER_WATER_MARK,
+                new WriteBufferWaterMark(8 * 1024, 32 * 1024))
+            .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, timeout)
+            .attr(SECURE, config.isSecure())
+            .attr(REMOTE_SOCKET, remoteAddress)
+            .attr(
+                ERROR_IF_CHANNEL_CLOSED_WITHOUT_RESPONSE,
+                config.errorIfChannelClosedWithoutResponse())
+            .attr(LOOP_COUNTER, loopCounter)
+            .attr(INCOMING_CHANNEL, incomingChannel)
+            .resolver(
+                config.clientInitializer().usesForwardProxy()
+                    ? NoopAddressResolverGroup.INSTANCE
+                    : DefaultAddressResolverGroup.INSTANCE)
+            .handler(config.clientInitializer());
+
+    Optional.ofNullable(config.responseFuture())
+        .ifPresent(responseFuture -> bootstrap.attr(RESPONSE_FUTURE, responseFuture));
+
+    return bootstrap;
+  }
+
+  private void registerNewChannel(
+      ChannelFuture channelFuture,
+      Channel incomingChannel,
+      InetSocketAddress remoteAddress,
+      @Nullable ChannelFutureListener onCreationListener) {
+
+    channelMap.addChannel(ChannelId.from(incomingChannel, remoteAddress), channelFuture);
+
+    if (onCreationListener != null) {
+      channelFuture.addListener(onCreationListener);
     }
 
-    val incomingChannelFinal = incomingChannel;
-    if (existingChannel != null) {
-      log.trace("reusing already existing channel");
-      existingChannel.addListener(
-          (ChannelFutureListener)
-              future -> {
-                if (future.isSuccess()) {
-                  // reusing the channel, but we want to get the response in our new responseFuture
-                  Optional.ofNullable(future.channel().attr(RESPONSE_FUTURE).get())
-                      .ifPresent(oldFuture -> oldFuture.complete(null));
-
-                  future.channel().attr(RESPONSE_FUTURE).set(responseFuture);
-                  incomingChannelFinal
-                      .attr(BinaryBridgeHandler.OUTGOING_CHANNEL)
-                      .set(future.channel());
-                }
-              });
-      if (onReuseListener != null) {
-        existingChannel.addListener(onReuseListener);
-      }
-      return existingChannel;
-    } else {
-      log.trace("creating a new channel");
-      if (timeoutInMilliseconds == null) {
-        timeoutInMilliseconds = configuration.socketConnectionTimeoutInMillis();
-      }
-      if (eventLoopGroup == null) {
-        eventLoopGroup = eventLoop;
-      }
-
-      var timeout = timeoutInMilliseconds != null ? timeoutInMilliseconds.intValue() : null;
-      var bootstrap =
-          new Bootstrap()
-              .group(eventLoopGroup)
-              .channel(NioSocketChannel.class)
-              .option(ChannelOption.AUTO_READ, true)
-              .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
-              .option(
-                  ChannelOption.WRITE_BUFFER_WATER_MARK,
-                  new WriteBufferWaterMark(8 * 1024, 32 * 1024))
-              .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, timeout)
-              .attr(SECURE, isSecure)
-              .attr(REMOTE_SOCKET, remoteAddress)
-              .attr(ERROR_IF_CHANNEL_CLOSED_WITHOUT_RESPONSE, errorIfChannelClosedWithoutResponse)
-              .attr(
-                  LOOP_COUNTER,
-                  incomingChannel.hasAttr(LOOP_COUNTER)
-                      ? incomingChannel.attr(LOOP_COUNTER).get() + 1
-                      : 0)
-              // When using a forward proxy, the resolving of hostnames is responsibility of the
-              // forward proxy.
-              // we just pass request along but dont resolve hostnames.
-              .resolver(
-                  clientInitializer.usesForwardProxy()
-                      ? NoopAddressResolverGroup.INSTANCE
-                      : DefaultAddressResolverGroup.INSTANCE)
-              .handler(clientInitializer);
-      if (responseFuture != null) {
-        bootstrap.attr(RESPONSE_FUTURE, responseFuture);
-      }
-      var channelFuture = bootstrap.connect(remoteAddress);
-      channelMap.addChannel(
-          ReusableChannelMap.ChannelId.from(incomingChannel, remoteAddress), channelFuture);
-      if (onCreationListener != null) {
-        channelFuture.addListener(onCreationListener);
-      }
-      channelFuture.addListener(
-          (ChannelFutureListener)
-              future -> {
-                // when the channel is closed we remove it from the channelsMap
-                future.channel().closeFuture().addListener(f -> channelMap.remove(future));
-                incomingChannelFinal
-                    .attr(BinaryBridgeHandler.OUTGOING_CHANNEL)
-                    .set(future.channel());
-              });
-      return channelFuture;
-    }
+    channelFuture.addListener(
+        (ChannelFutureListener)
+            future -> {
+              future.channel().closeFuture().addListener(f -> channelMap.remove(future));
+              incomingChannel.attr(BinaryBridgeHandler.OUTGOING_CHANNEL).set(future.channel());
+            });
   }
 
   public int getLoopCounterForOpenConnectionFromPort(int port) {

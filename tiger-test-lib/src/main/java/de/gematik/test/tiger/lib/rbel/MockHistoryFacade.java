@@ -86,15 +86,17 @@ public class MockHistoryFacade implements RbelMessageHistory.Facade {
 
   @Override
   public Collection<RbelElement> getMessagesAfter(RbelElement element, boolean includeElement) {
-    return element
-        .getSequenceNumber()
-        .map(seqNr -> messages.tailMap(seqNr, includeElement).values())
-        .orElseGet(messages::values);
+    var candidates =
+        element
+            .getSequenceNumber()
+            .map(seqNr -> messages.tailMap(seqNr, includeElement).values())
+            .orElseGet(messages::values);
+    return RbelMessageHistory.getLongestFinishedMessagesPrefix(candidates.stream());
   }
 
   @Override
   public Collection<RbelElement> getMessages() {
-    return messages.values();
+    return RbelMessageHistory.getLongestFinishedMessagesPrefix(messages.values().stream());
   }
 
   @Override

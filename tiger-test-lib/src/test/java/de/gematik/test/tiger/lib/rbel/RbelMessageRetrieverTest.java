@@ -29,16 +29,23 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.doAnswer;
 
+import de.gematik.rbellogger.RbelConversionPhase;
 import de.gematik.rbellogger.RbelConverter;
 import de.gematik.rbellogger.RbelLogger;
 import de.gematik.rbellogger.data.RbelElement;
 import de.gematik.rbellogger.data.RbelMessageMetadata;
+import de.gematik.rbellogger.data.core.RbelMismatchNoteFacet;
+import de.gematik.rbellogger.data.core.RbelRequestFacet;
 import de.gematik.rbellogger.facets.cetp.RbelCetpFacet;
 import de.gematik.rbellogger.facets.http.RbelHttpMessageFacet;
 import de.gematik.rbellogger.facets.http.RbelHttpRequestFacet;
 import de.gematik.rbellogger.facets.http.RbelHttpResponseFacet;
 import de.gematik.test.tiger.common.config.TigerGlobalConfiguration;
 import de.gematik.test.tiger.glue.RBelValidatorGlue;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Optional;
+import java.util.SortedSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -1035,5 +1042,32 @@ class RbelMessageRetrieverTest extends AbstractRbelMessageValidatorTest {
         .doesNotThrowAnyException();
 
     TigerGlobalConfiguration.reset();
+  }
+
+  @Test
+  void shouldRecheckMessageOnceAfterItFinishesParsing() {
+    var request = new RbelElement();
+    request.setSequenceNumber(1L);
+    request.setConversionPhase(RbelConversionPhase.UNPARSED);
+    localProxyRbelMessageListenerTestAdapter.addMessage(request);
+
+    var mismatchNotes = new HashMap<RbelElement, SortedSet<RbelMismatchNoteFacet>>();
+    var checkedCandidates = new HashSet<RbelElement>();
+    var requestParameter = RequestParameter.builder().path(".*").build();
+
+    var firstTry =
+        rbelMessageRetriever.findMessage(
+            requestParameter, Optional.empty(), mismatchNotes, checkedCandidates);
+    assertThat(firstTry).isEmpty();
+
+    request.addFacet(
+        RbelHttpRequestFacet.builder().path(new RbelElement("/foo".getBytes(), null)).build());
+    request.addFacet(new RbelRequestFacet("request", false));
+    request.setConversionPhase(RbelConversionPhase.COMPLETED);
+
+    var secondTry =
+        rbelMessageRetriever.findMessage(
+            requestParameter, Optional.empty(), mismatchNotes, checkedCandidates);
+    assertThat(secondTry).contains(request);
   }
 }

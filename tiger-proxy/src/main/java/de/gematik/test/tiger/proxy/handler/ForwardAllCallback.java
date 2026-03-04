@@ -87,10 +87,15 @@ public class ForwardAllCallback extends AbstractTigerRouteCallback {
   }
 
   private boolean targetsSelf(HttpRequest req) {
-    val requestPort = req.socketAddressFromHostHeader().getPort();
-    val requestHostName = req.socketAddressFromHostHeader().getHostName();
-    return requestPort == getTigerProxy().getProxyPort()
-        && (requestHostName.equalsIgnoreCase("127.0.0.1")
-            || requestHostName.equalsIgnoreCase("localhost"));
+    return req.optionalSocketAddressFromHostHeader()
+        .map(
+            address -> {
+              val requestPort = address.getPort();
+              val requestHostName = address.getHostName();
+              return requestPort == getTigerProxy().getProxyPort()
+                  && (requestHostName.equalsIgnoreCase("127.0.0.1")
+                      || requestHostName.equalsIgnoreCase("localhost"));
+            })
+        .orElse(false);
   }
 }

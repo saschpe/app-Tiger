@@ -62,7 +62,11 @@ import org.apache.directory.api.ldap.model.entry.DefaultEntry;
 import org.apache.directory.api.ldap.model.entry.DefaultModification;
 import org.apache.directory.api.ldap.model.entry.ModificationOperation;
 import org.apache.directory.api.ldap.model.message.AddRequestImpl;
+import org.apache.directory.api.ldap.model.message.AliasDerefMode;
 import org.apache.directory.api.ldap.model.message.ModifyRequestImpl;
+import org.apache.directory.api.ldap.model.message.ResultCodeEnum;
+import org.apache.directory.api.ldap.model.message.SearchRequestImpl;
+import org.apache.directory.api.ldap.model.message.SearchScope;
 import org.apache.directory.api.ldap.model.name.Dn;
 import org.apache.directory.api.ldap.model.name.Rdn;
 import org.apache.directory.api.util.FileUtils;
@@ -281,6 +285,80 @@ class RbelLdapConverterTest {
     assertThat(html).contains("DeleteRequest").contains("dc=example,dc=com");
   }
 
+  @SneakyThrows
+  @Test
+  void shouldRenderMessageIdCorrectly() {
+    var searchReq = new SearchRequestImpl();
+    searchReq.setMessageId(42);
+    searchReq.setBase(new Dn("dc=example,dc=com"));
+    searchReq.setScope(SearchScope.SUBTREE);
+    searchReq.setFilter("(objectClass=*)");
+
+    Asn1Buffer buffer = new Asn1Buffer();
+    LdapEncoder.encodeMessage(buffer, codec, searchReq);
+    RbelElement elem = rbelConverter.convertElement(buffer.getBytes().array(), null);
+
+    final String html = RbelHtmlRenderer.render(List.of(elem));
+
+    assertThat(html).contains("Message ID").contains(">42<").doesNotContain(">null<");
+  }
+
+  @SneakyThrows
+  @Test
+  void shouldRenderSearchRequestWithRequestedAttributesList() {
+    var searchReq = new SearchRequestImpl();
+    searchReq.setMessageId(100);
+    searchReq.setBase(new Dn("dc=example,dc=com"));
+    searchReq.setScope(SearchScope.SUBTREE);
+    searchReq.setFilter("(objectClass=*)");
+    searchReq.addAttributes("cn", "mail", "telephoneNumber");
+
+    Asn1Buffer buffer = new Asn1Buffer();
+    LdapEncoder.encodeMessage(buffer, codec, searchReq);
+    RbelElement elem = rbelConverter.convertElement(buffer.getBytes().array(), null);
+
+    final String html = RbelHtmlRenderer.render(List.of(elem));
+
+    assertThat(html)
+        .contains("SearchRequest")
+        .contains("Requested Attributes")
+        .contains("<li>cn</li>")
+        .contains("<li>mail</li>")
+        .contains("<li>telephoneNumber</li>");
+  }
+
+  @SneakyThrows
+  @Test
+  void shouldRenderSaslBindRequest() {
+    var bindReq = new org.apache.directory.api.ldap.model.message.BindRequestImpl();
+    bindReq.setMessageId(51);
+    bindReq.setVersion3(true);
+    bindReq.setSimple(false);
+    bindReq.setSaslMechanism("GSSAPI");
+    Asn1Buffer buffer = new Asn1Buffer();
+    LdapEncoder.encodeMessage(buffer, codec, bindReq);
+    RbelElement elem = rbelConverter.convertElement(buffer.getBytes().array(), null);
+
+    final String html = RbelHtmlRenderer.render(List.of(elem));
+
+    assertThat(html).contains("BindRequest").contains("SASL Mechanism").contains("GSSAPI");
+  }
+
+  @SneakyThrows
+  @Test
+  void shouldRenderExtendedRequestWithOid() {
+    // Use a known-working extended request (StartTLS)
+    var startTlsReq = new StartTlsRequestImpl();
+    startTlsReq.setMessageId(52);
+    Asn1Buffer buffer = new Asn1Buffer();
+    LdapEncoder.encodeMessage(buffer, codec, startTlsReq);
+    RbelElement elem = rbelConverter.convertElement(buffer.getBytes().array(), null);
+
+    final String html = RbelHtmlRenderer.render(List.of(elem));
+
+    assertThat(html).contains("StartTlsRequest").contains("Request Name").contains("StartTLS");
+  }
+
   @Test
   void protocolOp_shouldProvideStructuredAccessToDeleteRequest() {
     final RbelElement convertedElement = rbelConverter.convertElement(DELETE_REQUEST, null);
@@ -313,6 +391,196 @@ class RbelLdapConverterTest {
     assertThat(convertedElement)
         .extractChildWithPath("$.protocolOp.operationType")
         .hasValueEqualTo(LdapOperationType.SEARCH_RESULT_ENTRY);
+  }
+
+  @SneakyThrows
+  @Test
+  void protocolOp_shouldProvideAttributesForSearchRequest() {
+    var searchReq = new SearchRequestImpl();
+    searchReq.setMessageId(100);
+    searchReq.setBase(new Dn("dc=example,dc=com"));
+    searchReq.setScope(SearchScope.SUBTREE);
+    searchReq.setFilter("(objectClass=*)");
+    searchReq.addAttributes("cn", "mail", "telephoneNumber");
+
+    Asn1Buffer buffer = new Asn1Buffer();
+    LdapEncoder.encodeMessage(buffer, codec, searchReq);
+    RbelElement elem = rbelConverter.convertElement(buffer.getBytes().array(), null);
+
+    assertThat(elem)
+        .hasFacet(RbelLdapFacet.class)
+        .extractChildWithPath("$.protocolOp")
+        .hasFacet(RbelLdapProtocolOpFacet.class)
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.operationType")
+        .hasValueEqualTo(LdapOperationType.SEARCH_REQUEST)
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.baseObject")
+        .hasValueEqualTo("dc=example,dc=com")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.scope")
+        .hasValueEqualTo("SUBTREE")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.filter")
+        .hasValueEqualTo("(objectClass=*)")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.requestedAttributes.0")
+        .hasValueEqualTo("cn")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.requestedAttributes.1")
+        .hasValueEqualTo("mail")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.requestedAttributes.2")
+        .hasValueEqualTo("telephoneNumber");
+  }
+
+  @SneakyThrows
+  @Test
+  void protocolOp_shouldProvideAllSearchRequestFields() {
+    var searchReq = new SearchRequestImpl();
+    searchReq.setMessageId(101);
+    searchReq.setBase(new Dn("dc=test,dc=com"));
+    searchReq.setScope(SearchScope.ONELEVEL);
+    searchReq.setDerefAliases(AliasDerefMode.DEREF_ALWAYS);
+    searchReq.setSizeLimit(100);
+    searchReq.setTimeLimit(60);
+    searchReq.setTypesOnly(true);
+    searchReq.setFilter("(cn=test)");
+
+    Asn1Buffer buffer = new Asn1Buffer();
+    LdapEncoder.encodeMessage(buffer, codec, searchReq);
+    RbelElement elem = rbelConverter.convertElement(buffer.getBytes().array(), null);
+
+    assertThat(elem)
+        .extractChildWithPath("$.protocolOp.derefAliases")
+        .hasValueEqualTo("DEREF_ALWAYS")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.sizeLimit")
+        .hasValueEqualTo("100")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.timeLimit")
+        .hasValueEqualTo("60")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.typesOnly")
+        .hasValueEqualTo("true");
+  }
+
+  @SneakyThrows
+  @Test
+  void protocolOp_shouldProvideModifyDnRequestFields() {
+    var modDnReq = new org.apache.directory.api.ldap.model.message.ModifyDnRequestImpl();
+    modDnReq.setMessageId(102);
+    modDnReq.setName(new Dn("cn=Old Name,dc=example,dc=com"));
+    modDnReq.setNewRdn(new Rdn("cn=New Name"));
+    modDnReq.setDeleteOldRdn(true);
+    modDnReq.setNewSuperior(new Dn("ou=People,dc=example,dc=com"));
+
+    Asn1Buffer buffer = new Asn1Buffer();
+    LdapEncoder.encodeMessage(buffer, codec, modDnReq);
+    RbelElement elem = rbelConverter.convertElement(buffer.getBytes().array(), null);
+
+    assertThat(elem)
+        .extractChildWithPath("$.protocolOp.dn")
+        .hasValueEqualTo("cn=Old Name,dc=example,dc=com")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.newRdn")
+        .hasValueEqualTo("cn=New Name")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.deleteOldRdn")
+        .hasValueEqualTo("true")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.newSuperior")
+        .hasValueEqualTo("ou=People,dc=example,dc=com");
+  }
+
+  @SneakyThrows
+  @Test
+  void protocolOp_shouldProvideBindRequestFields() {
+    var bindReq = new org.apache.directory.api.ldap.model.message.BindRequestImpl();
+    bindReq.setMessageId(103);
+    bindReq.setVersion3(true);
+    bindReq.setName("cn=admin,dc=example,dc=com");
+    bindReq.setSimple(true);
+
+    Asn1Buffer buffer = new Asn1Buffer();
+    LdapEncoder.encodeMessage(buffer, codec, bindReq);
+    RbelElement elem = rbelConverter.convertElement(buffer.getBytes().array(), null);
+
+    assertThat(elem)
+        .extractChildWithPath("$.protocolOp.version")
+        .hasValueEqualTo("3")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.name")
+        .hasValueEqualTo("cn=admin,dc=example,dc=com")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.simple")
+        .hasValueEqualTo("true");
+  }
+
+  @SneakyThrows
+  @Test
+  void protocolOp_shouldProvideCompareRequestFields() {
+    var compareReq = new org.apache.directory.api.ldap.model.message.CompareRequestImpl();
+    compareReq.setMessageId(104);
+    compareReq.setName(new Dn("cn=test,dc=example,dc=com"));
+    compareReq.setAttributeId("userPassword");
+    compareReq.setAssertionValue("secret");
+
+    Asn1Buffer buffer = new Asn1Buffer();
+    LdapEncoder.encodeMessage(buffer, codec, compareReq);
+    RbelElement elem = rbelConverter.convertElement(buffer.getBytes().array(), null);
+
+    assertThat(elem)
+        .extractChildWithPath("$.protocolOp.dn")
+        .hasValueEqualTo("cn=test,dc=example,dc=com")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.attributeDesc")
+        .hasValueEqualTo("userPassword")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.assertionValue")
+        .hasValueEqualTo("secret");
+  }
+
+  @SneakyThrows
+  @Test
+  void protocolOp_shouldProvideResultResponseFields() {
+    var bindResp = new org.apache.directory.api.ldap.model.message.BindResponseImpl(105);
+    bindResp.getLdapResult().setResultCode(ResultCodeEnum.SUCCESS);
+    bindResp.getLdapResult().setDiagnosticMessage("Bind successful");
+
+    Asn1Buffer buffer = new Asn1Buffer();
+    LdapEncoder.encodeMessage(buffer, codec, bindResp);
+    RbelElement elem = rbelConverter.convertElement(buffer.getBytes().array(), null);
+
+    assertThat(elem)
+        .extractChildWithPath("$.protocolOp.resultCode")
+        .hasValueEqualTo("SUCCESS")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.diagnosticMessage")
+        .hasValueEqualTo("Bind successful");
+  }
+
+  @SneakyThrows
+  @Test
+  void protocolOp_shouldProvideMatchedDnOnError() {
+    var searchResp = new org.apache.directory.api.ldap.model.message.SearchResultDoneImpl(106);
+    searchResp.getLdapResult().setResultCode(ResultCodeEnum.NO_SUCH_OBJECT);
+    searchResp.getLdapResult().setMatchedDn(new Dn("dc=example,dc=com"));
+    searchResp.getLdapResult().setDiagnosticMessage("Entry not found");
+
+    Asn1Buffer buffer = new Asn1Buffer();
+    LdapEncoder.encodeMessage(buffer, codec, searchResp);
+    RbelElement elem = rbelConverter.convertElement(buffer.getBytes().array(), null);
+
+    assertThat(elem)
+        .extractChildWithPath("$.protocolOp.resultCode")
+        .hasValueEqualTo("NO_SUCH_OBJECT")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.matchedDN")
+        .hasValueEqualTo("dc=example,dc=com")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.diagnosticMessage")
+        .hasValueEqualTo("Entry not found");
   }
 
   @Test
@@ -488,6 +756,34 @@ class RbelLdapConverterTest {
 
   @SneakyThrows
   @Test
+  void convertMessage_shouldConvertSaslBindRequest() {
+    var bindReq = new org.apache.directory.api.ldap.model.message.BindRequestImpl();
+    bindReq.setMessageId(50);
+    bindReq.setVersion3(true);
+    bindReq.setName("cn=admin,dc=example,dc=com");
+    bindReq.setSimple(false);
+    bindReq.setSaslMechanism("EXTERNAL");
+    bindReq.setCredentials("sasl-creds".getBytes());
+    Asn1Buffer buffer = new Asn1Buffer();
+    LdapEncoder.encodeMessage(buffer, codec, bindReq);
+    RbelElement elem = rbelConverter.convertElement(buffer.getBytes().array(), null);
+    assertThat(elem)
+        .hasFacet(RbelLdapFacet.class)
+        .extractChildWithPath("$.protocolOp.operationType")
+        .hasValueEqualTo(LdapOperationType.BIND_REQUEST)
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.simple")
+        .hasValueEqualTo("false")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.saslMechanism")
+        .hasValueEqualTo("EXTERNAL")
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.saslCredentials")
+        .hasValueEqualTo("sasl-creds".getBytes());
+  }
+
+  @SneakyThrows
+  @Test
   void convertMessage_shouldConvertModifyDnRequestAndResponse() {
     var modDnReq = new org.apache.directory.api.ldap.model.message.ModifyDnRequestImpl();
     modDnReq.setMessageId(13);
@@ -550,7 +846,10 @@ class RbelLdapConverterTest {
     assertThat(elem)
         .hasFacet(RbelLdapFacet.class)
         .extractChildWithPath("$.protocolOp.operationType")
-        .hasValueEqualTo(LdapOperationType.ABANDON_REQUEST);
+        .hasValueEqualTo(LdapOperationType.ABANDON_REQUEST)
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.abandonedMessageId")
+        .hasValueEqualTo(5);
   }
 
   @SneakyThrows
@@ -755,6 +1054,39 @@ class RbelLdapConverterTest {
         .hasFacet(RbelLdapFacet.class)
         .extractChildWithPath("$.protocolOp.operationType")
         .hasValueEqualTo(LdapOperationType.CANCEL_RESPONSE);
+  }
+
+  @SneakyThrows
+  @Test
+  void convertMessage_shouldConvertGenericExtendedRequestAndResponse() {
+    // Use WhoAmI extended request/response for testing generic extended operation handling
+    var whoAmIReq = new WhoAmIRequestImpl();
+    whoAmIReq.setMessageId(40);
+    Asn1Buffer buffer = new Asn1Buffer();
+    LdapEncoder.encodeMessage(buffer, codec, whoAmIReq);
+    RbelElement reqElem = rbelConverter.convertElement(buffer.getBytes().array(), null);
+
+    assertThat(reqElem)
+        .hasFacet(RbelLdapFacet.class)
+        .extractChildWithPath("$.protocolOp.operationType")
+        .hasValueEqualTo(LdapOperationType.WHO_AM_I_REQUEST)
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.requestName")
+        .matches(
+            requestName -> requestName.printValue().filter(s -> s.contains("WhoAmI")).isPresent());
+
+    // Test generic ExtendedResponse
+    String testOid = "1.2.3.4.5.6.7";
+    byte[] extendedResponseBytes = encodeExtendedResponse(41, testOid, null);
+    RbelElement respElem = rbelConverter.convertElement(extendedResponseBytes, null);
+
+    assertThat(respElem)
+        .hasFacet(RbelLdapFacet.class)
+        .extractChildWithPath("$.protocolOp.operationType")
+        .hasValueEqualTo(LdapOperationType.EXTENDED_RESPONSE)
+        .andTheInitialElement()
+        .extractChildWithPath("$.protocolOp.responseName")
+        .hasValueEqualTo(testOid);
   }
 
   private byte[] encodeExtendedResponse(int messageId, String responseName, byte[] responseValue)

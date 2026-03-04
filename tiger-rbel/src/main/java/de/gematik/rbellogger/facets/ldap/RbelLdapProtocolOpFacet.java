@@ -53,11 +53,14 @@ public class RbelLdapProtocolOpFacet implements RbelFacet {
   private final RbelElement timeLimit;
   private final RbelElement typesOnly;
   private final RbelElement filter;
+  private final RbelElement requestedAttributes;
 
   // BindRequest fields
   private final RbelElement version;
   private final RbelElement name;
   private final RbelElement simple;
+  private final RbelElement saslMechanism;
+  private final RbelElement saslCredentials;
 
   // CompareRequest fields
   private final RbelElement attributeDesc;
@@ -65,12 +68,15 @@ public class RbelLdapProtocolOpFacet implements RbelFacet {
 
   // ExtendedRequest/Response fields
   private final RbelElement requestName;
+  private final RbelElement requestValue;
   private final RbelElement responseName;
+  private final RbelElement responseValue;
 
   // Response fields (ResultResponse)
   private final RbelElement resultCode;
   private final RbelElement matchedDN;
   private final RbelElement diagnosticMessage;
+  private final RbelElement referrals;
 
   // BindResponse fields
   private final RbelElement serverSaslCreds;
@@ -87,6 +93,9 @@ public class RbelLdapProtocolOpFacet implements RbelFacet {
   // CancelRequest field
   private final RbelElement cancelId;
 
+  // AbandonRequest field
+  private final RbelElement abandonedMessageId;
+
   @Override
   public RbelMultiMap<RbelElement> getChildElements() {
     return new RbelMultiMap<RbelElement>()
@@ -102,22 +111,29 @@ public class RbelLdapProtocolOpFacet implements RbelFacet {
         .withSkipIfNull("timeLimit", timeLimit)
         .withSkipIfNull("typesOnly", typesOnly)
         .withSkipIfNull("filter", filter)
+        .withSkipIfNull("requestedAttributes", requestedAttributes)
         .withSkipIfNull("version", version)
         .withSkipIfNull("name", name)
         .withSkipIfNull("simple", simple)
+        .withSkipIfNull("saslMechanism", saslMechanism)
+        .withSkipIfNull("saslCredentials", saslCredentials)
         .withSkipIfNull("attributeDesc", attributeDesc)
         .withSkipIfNull("assertionValue", assertionValue)
         .withSkipIfNull("requestName", requestName)
+        .withSkipIfNull("requestValue", requestValue)
         .withSkipIfNull("responseName", responseName)
+        .withSkipIfNull("responseValue", responseValue)
         .withSkipIfNull("resultCode", resultCode)
         .withSkipIfNull("matchedDN", matchedDN)
         .withSkipIfNull("diagnosticMessage", diagnosticMessage)
+        .withSkipIfNull("referrals", referrals)
         .withSkipIfNull("serverSaslCreds", serverSaslCreds)
         .withSkipIfNull("userIdentity", userIdentity)
         .withSkipIfNull("oldPassword", oldPassword)
         .withSkipIfNull("newPassword", newPassword)
         .withSkipIfNull("genPassword", genPassword)
         .withSkipIfNull("authzId", authzId)
-        .withSkipIfNull("cancelId", cancelId);
+        .withSkipIfNull("cancelId", cancelId)
+        .withSkipIfNull("abandonedMessageId", abandonedMessageId);
   }
 }

@@ -64,7 +64,8 @@ public class RbelLdapFacet implements RbelFacet {
               RbelHtmlRenderingToolkit renderingToolkit) {
             final RbelLdapFacet facet = element.getFacetOrFail(RbelLdapFacet.class);
 
-            final String messageId = facet.getChildElements().get(MSG_ID_KEY).getRawStringContent();
+            final String messageId =
+                facet.getChildElements().get(MSG_ID_KEY).printValue().orElse("Unknown");
             final RbelElement protocolOpElement = facet.getChildElements().get(PROTOCOL_OP_KEY);
 
             // Get operation type from the protocolOp facet
@@ -106,13 +107,21 @@ public class RbelLdapFacet implements RbelFacet {
                       addFieldIfPresent(attributesMap, "Name", protocolOpFacet.getName());
                       addFieldIfPresent(attributesMap, "Simple", protocolOpFacet.getSimple());
                       addFieldIfPresent(
+                          attributesMap, "SASL Mechanism", protocolOpFacet.getSaslMechanism());
+                      addFieldIfPresent(
+                          attributesMap, "SASL Credentials", protocolOpFacet.getSaslCredentials());
+                      addFieldIfPresent(
                           attributesMap, "Attribute Desc", protocolOpFacet.getAttributeDesc());
                       addFieldIfPresent(
                           attributesMap, "Assertion Value", protocolOpFacet.getAssertionValue());
                       addFieldIfPresent(
                           attributesMap, "Request Name", protocolOpFacet.getRequestName());
                       addFieldIfPresent(
+                          attributesMap, "Request Value", protocolOpFacet.getRequestValue());
+                      addFieldIfPresent(
                           attributesMap, "Response Name", protocolOpFacet.getResponseName());
+                      addFieldIfPresent(
+                          attributesMap, "Response Value", protocolOpFacet.getResponseValue());
                       addFieldIfPresent(
                           attributesMap, "Result Code", protocolOpFacet.getResultCode());
                       addFieldIfPresent(
@@ -123,6 +132,21 @@ public class RbelLdapFacet implements RbelFacet {
                           protocolOpFacet.getDiagnosticMessage());
                       addFieldIfPresent(
                           attributesMap, "Server SASL Creds", protocolOpFacet.getServerSaslCreds());
+                      addFieldIfPresent(attributesMap, "Cancel ID", protocolOpFacet.getCancelId());
+                      addFieldIfPresent(
+                          attributesMap,
+                          "Abandoned Message ID",
+                          protocolOpFacet.getAbandonedMessageId());
+                      addFieldIfPresent(
+                          attributesMap, "User Identity", protocolOpFacet.getUserIdentity());
+                      addFieldIfPresent(
+                          attributesMap, "Authorization ID", protocolOpFacet.getAuthzId());
+                      addFieldIfPresent(
+                          attributesMap, "Generated Password", protocolOpFacet.getGenPassword());
+                      addFieldIfPresent(
+                          attributesMap, "Old Password", protocolOpFacet.getOldPassword());
+                      addFieldIfPresent(
+                          attributesMap, "New Password", protocolOpFacet.getNewPassword());
                     });
 
             if (facet.getChildElements().containsKey(ATTRIBUTES_KEY)) {
@@ -135,7 +159,7 @@ public class RbelLdapFacet implements RbelFacet {
                 for (Map.Entry<String, RbelElement> attribute : attributesFacet.entries()) {
                   String attributeName =
                       resolveAttributeName(attribute.getKey(), attribute.getValue());
-                  String value = attribute.getValue().getRawStringContent();
+                  String value = getStringValue(attribute.getValue());
                   attributesMap.computeIfPresent(attributeName, (k, v) -> v + ", " + value);
                   attributesMap.putIfAbsent(attributeName, value);
                 }
@@ -157,7 +181,7 @@ public class RbelLdapFacet implements RbelFacet {
                               .ifPresent(s -> attributesMap.put("Modification Attribute Name", s));
                           var i = new AtomicInteger(0);
                           modFacet.getValues().stream()
-                              .map(RbelElement::getRawStringContent)
+                              .map(RbelLdapFacet::getStringValue)
                               .forEach(
                                   v ->
                                       attributesMap.put(
@@ -189,6 +213,20 @@ public class RbelLdapFacet implements RbelFacet {
                       td(pre().withText(entry.getValue()).withClass("value"))));
             }
 
+            // Add requested attributes as HTML list if present
+            protocolOpElement
+                .getFacet(RbelLdapProtocolOpFacet.class)
+                .map(RbelLdapProtocolOpFacet::getRequestedAttributes)
+                .flatMap(attrs -> buildListRow("Requested Attributes", attrs))
+                .ifPresent(tableRows::add);
+
+            // Add referrals as HTML list if present
+            protocolOpElement
+                .getFacet(RbelLdapProtocolOpFacet.class)
+                .map(RbelLdapProtocolOpFacet::getReferrals)
+                .flatMap(refs -> buildListRow("Referrals", refs))
+                .ifPresent(tableRows::add);
+
             DomContent table = table().withClass("table").with(tbody().with(tableRows));
 
             return ancestorTitle()
@@ -212,11 +250,33 @@ public class RbelLdapFacet implements RbelFacet {
 
   private static void addFieldIfPresent(Map<String, String> map, String key, RbelElement element) {
     if (element != null) {
-      String value = element.printValue().orElseGet(element::getRawStringContent);
+      String value = getStringValue(element);
       if (value != null && !value.isEmpty()) {
         map.put(key, value);
       }
     }
+  }
+
+  private static String getStringValue(RbelElement element) {
+    return element.printValue().orElseGet(element::getRawStringContent);
+  }
+
+  private static Optional<DomContent> buildListRow(String label, RbelElement listElement) {
+    if (listElement == null) {
+      return Optional.empty();
+    }
+    var childElements = listElement.getChildNodes();
+    if (childElements.isEmpty()) {
+      return Optional.empty();
+    }
+    List<DomContent> listItems = new ArrayList<>();
+    for (RbelElement childElement : childElements) {
+      listItems.add(li(getStringValue(childElement)));
+    }
+    return Optional.of(
+        tr(
+            td(pre().withText(label).withClass("key")),
+            td(ul().with(listItems)).withClass("value")));
   }
 
   private static String resolveAttributeName(String sanitizedKey, RbelElement valueElement) {

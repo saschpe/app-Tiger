@@ -27,11 +27,13 @@ import static de.gematik.test.tiger.mockserver.model.SocketAddress.Scheme.HTTPS;
 import static io.netty.handler.codec.http.HttpHeaderNames.HOST;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 
+import com.google.common.net.HostAndPort;
 import de.gematik.rbellogger.data.RbelElement;
 import java.net.InetSocketAddress;
 import java.util.*;
 import lombok.*;
 import lombok.experimental.Accessors;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
 
@@ -45,6 +47,7 @@ import org.apache.commons.lang3.StringUtils;
 @Builder(toBuilder = true)
 @NoArgsConstructor
 @AllArgsConstructor
+@Slf4j
 public class HttpRequest extends HttpMessage<HttpRequest> {
   private String method = "";
   private String path = "";
@@ -106,20 +109,15 @@ public class HttpRequest extends HttpMessage<HttpRequest> {
 
   public HttpRequest setReceiverAddress(Boolean isSecure, String host, Integer port) {
     if (isNotBlank(host)) {
-      String[] hostParts = host.split(":");
-      boolean secure = Boolean.TRUE.equals(isSecure);
-      if (hostParts.length > 1) {
-        setReceiverAddress(
-            hostParts[0],
-            port != null ? port : Integer.parseInt(hostParts[1]),
-            secure ? HTTPS : HTTP);
-      } else if (secure) {
-        setReceiverAddress(host, port != null ? port : 443, HTTPS);
-      } else {
-        setReceiverAddress(host, port != null ? port : 80, HTTP);
-      }
+      val secure = Boolean.TRUE.equals(isSecure);
+      val hostPort = parseHostAndPort(host, computePort(port, secure));
+      return setReceiverAddress(hostPort.getHostName(), hostPort.getPort(), secure ? HTTPS : HTTP);
     }
     return this;
+  }
+
+  private static Integer computePort(Integer port, boolean secure) {
+    return Optional.ofNullable(port).orElse(secure ? 443 : 80);
   }
 
   public boolean matches(final String method) {
@@ -236,27 +234,59 @@ public class HttpRequest extends HttpMessage<HttpRequest> {
     return this;
   }
 
-  public InetSocketAddress socketAddressFromHostHeader() {
+  /**
+   * Returns the socket address from the Host header, CONNECT path, or receiver address. Returns
+   * empty Optional if no valid address can be determined.
+   */
+  public Optional<InetSocketAddress> optionalSocketAddressFromHostHeader() {
     if (receiverAddress != null && receiverAddress.getHost() != null) {
       boolean isSsl =
           receiverAddress.getScheme() != null
               && receiverAddress.getScheme().equals(SocketAddress.Scheme.HTTPS);
-      return new InetSocketAddress(
-          receiverAddress.getHost(),
-          receiverAddress.getPort() != null ? receiverAddress.getPort() : isSsl ? 443 : 80);
+      val port = computePort(receiverAddress.getPort(), isSsl);
+      return Optional.of(new InetSocketAddress(receiverAddress.getHost(), port));
     } else if (isNotBlank(getFirstHeader(HOST.toString()))) {
       boolean isSsl = Optional.ofNullable(isSecure()).orElse(false);
-      String[] hostHeaderParts = getFirstHeader(HOST.toString()).split(":");
-      return new InetSocketAddress(
-          hostHeaderParts[0],
-          hostHeaderParts.length > 1 ? Integer.parseInt(hostHeaderParts[1]) : isSsl ? 443 : 80);
+      return Optional.of(parseHostAndPort(getFirstHeader(HOST.toString()), isSsl ? 443 : 80));
     } else {
-      throw new IllegalArgumentException(
-          "Host header must be provided to determine remote socket address, the request does not"
-              + " include the \"Host\" header:"
-              + NEW_LINE
-              + this);
+      log.trace("No Host header or receiver address available for request: {} {}", method, path);
+      return Optional.empty();
     }
+  }
+
+  /**
+   * Returns the socket address from the Host header, CONNECT path, or receiver address.
+   *
+   * @throws IllegalArgumentException if no valid address can be determined
+   */
+  public InetSocketAddress socketAddressFromHostHeader() {
+    return optionalSocketAddressFromHostHeader()
+        .orElseThrow(
+            () -> {
+              log.warn(
+                  "Host header missing in request! Method: {}, Path: {}, Headers: {}",
+                  method,
+                  path,
+                  headers);
+              return new IllegalArgumentException(
+                  "Host header must be provided to determine remote socket address, the request does not"
+                      + " include the \"Host\" header:"
+                      + NEW_LINE
+                      + this);
+            });
+  }
+
+  /**
+   * Parses a host:port string, handling IPv6 addresses correctly. Examples: "example.com:8080",
+   * "example.com", "[::1]:8080", "192.168.1.1:443"
+   */
+  private InetSocketAddress parseHostAndPort(String host, Integer port) {
+    if (StringUtils.isBlank(host)) {
+      throw new IllegalArgumentException("Host cannot be blank");
+    }
+
+    var hostAndPort = HostAndPort.fromString(host).withDefaultPort(port);
+    return new InetSocketAddress(hostAndPort.getHost(), hostAndPort.getPort());
   }
 
   public String getMethodOrDefault(String fallback) {

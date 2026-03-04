@@ -34,6 +34,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.util.AttributeKey;
+import java.util.Optional;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
@@ -105,10 +106,14 @@ public class BinaryBridgeHandler extends SimpleChannelInboundHandler<BinaryMessa
 
   @Override
   public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+    val incomingChannel = ctx.channel().attr(INCOMING_CHANNEL).get();
+    val receiverAddress =
+        Optional.ofNullable(incomingChannel)
+            .map(Channel::remoteAddress)
+            .map(RbelSocketAddress::create)
+            .orElse(null);
     binaryProxyListener.propagateExceptionMessageSafe(
-        cause,
-        RbelSocketAddress.create(ctx.channel().remoteAddress()),
-        RbelSocketAddress.create(ctx.channel().attr(INCOMING_CHANNEL).get().remoteAddress()));
+        cause, RbelSocketAddress.create(ctx.channel().remoteAddress()), receiverAddress);
     closeOnFlush(ctx.channel());
   }
 }

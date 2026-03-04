@@ -82,17 +82,18 @@ public class TracingEndpointConfiguration
 
   @Override
   public void registerStompEndpoints(StompEndpointRegistry registry) {
+    // Intentionally register both variants on the same path: SockJS fallback and raw WebSocket
+    // STOMP.
     registry
         .addEndpoint(tigerProxyConfiguration.getTrafficEndpointConfiguration().getWsEndpoint())
+        .setAllowedOriginPatterns("*")
         .withSockJS()
         .setTaskScheduler(getThreadPoolTaskScheduler());
 
     registry
         .addEndpoint(tigerProxyConfiguration.getTrafficEndpointConfiguration().getWsEndpoint())
         .setHandshakeHandler(new DefaultHandshakeHandler(new TomcatRequestUpgradeStrategy()))
-        .setAllowedOrigins("*")
-        .withSockJS()
-        .setTaskScheduler(getThreadPoolTaskScheduler());
+        .setAllowedOriginPatterns("*");
 
     registry
         .addEndpoint("/newMessages")
