@@ -25,6 +25,7 @@ import static de.gematik.test.tiger.mockserver.httpclient.NettyHttpClient.REMOTE
 import static de.gematik.test.tiger.mockserver.httpclient.NettyHttpClient.SECURE;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 
+import de.gematik.test.tiger.mockserver.codec.Http2PipelineHelper;
 import de.gematik.test.tiger.mockserver.codec.MockServerBinaryClientCodec;
 import de.gematik.test.tiger.mockserver.codec.MockServerHttpClientCodec;
 import de.gematik.test.tiger.mockserver.configuration.MockServerConfiguration;
@@ -37,7 +38,6 @@ import io.netty.channel.*;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpObjectAggregator;
-import io.netty.handler.codec.http2.*;
 import io.netty.handler.logging.LogLevel;
 import io.netty.handler.logging.LoggingHandler;
 import io.netty.handler.proxy.HttpProxyHandler;
@@ -124,6 +124,9 @@ public class HttpClientInitializer extends ChannelInitializer<SocketChannel> {
         // use ALPN to determine http1 or http2
         pipeline.addLast(
             new HttpOrHttp2Initializer(this::configureHttp1Pipeline, this::configureHttp2Pipeline));
+      } else if (httpProtocol == HttpProtocol.HTTP_2) {
+        // h2c (HTTP/2 cleartext via prior knowledge)
+        configureHttp2Pipeline(pipeline);
       } else {
         // default to http1 without TLS
         configureHttp1Pipeline(pipeline);
@@ -177,6 +180,7 @@ public class HttpClientInitializer extends ChannelInitializer<SocketChannel> {
 
   private void configureHttp1Pipeline(ChannelPipeline pipeline) {
     pipeline.addLast(new HttpClientCodec());
+    // TODO: make max content length configurable instead of Integer.MAX_VALUE
     pipeline.addLast(new HttpObjectAggregator(Integer.MAX_VALUE));
     pipeline.addLast(new MockServerHttpClientCodec(proxyConfiguration));
     pipeline.addLast(
@@ -187,24 +191,14 @@ public class HttpClientInitializer extends ChannelInitializer<SocketChannel> {
   }
 
   private void configureHttp2Pipeline(ChannelPipeline pipeline) {
-    final Http2Connection connection = new DefaultHttp2Connection(false);
-    final HttpToHttp2ConnectionHandlerBuilder http2ConnectionHandlerBuilder =
-        new HttpToHttp2ConnectionHandlerBuilder()
-            .frameListener(
-                new DelegatingDecompressorFrameListener(
-                    connection,
-                    new InboundHttp2ToHttpAdapterBuilder(connection)
-                        .maxContentLength(Integer.MAX_VALUE)
-                        .propagateSettings(true)
-                        .validateHttpHeaders(false)
-                        .build()))
-            .connection(connection)
-            .flushPreface(true);
-    if (log.isTraceEnabled()) {
-      http2ConnectionHandlerBuilder.frameLogger(
-          new Http2FrameLogger(LogLevel.TRACE, HttpClientHandler.class.getName()));
-    }
-    pipeline.addLast(http2ConnectionHandlerBuilder.build());
+    Http2PipelineHelper.addHttp2Codecs(
+        pipeline,
+        false,
+        true,
+        HttpClientHandler.class,
+        mockServerConfiguration.http2FrameParsingActive()
+            ? mockServerConfiguration.binaryProxyListener()
+            : null);
     pipeline.addLast(new Http2SettingsHandler(protocolFuture));
     pipeline.addLast(new MockServerHttpClientCodec(proxyConfiguration));
     pipeline.addLast(httpClientHandler);

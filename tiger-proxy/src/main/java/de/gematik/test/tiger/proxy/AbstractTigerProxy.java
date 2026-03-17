@@ -38,6 +38,11 @@ import de.gematik.test.tiger.proxy.exceptions.TigerProxyStartupException;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.security.Key;
 import java.security.KeyPair;
@@ -45,10 +50,12 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import kong.unirest.core.Unirest;
 import lombok.*;
@@ -310,9 +317,22 @@ public abstract class AbstractTigerProxy implements ITigerProxy, AutoCloseable {
     rbelMessageListeners.remove(listener);
   }
 
-  protected void waitForRemoteTigerProxyToBeOnline(String url) {
-    LocalDateTime pollingStart = LocalDateTime.now();
-    while (!isShuttingDown && !isGivenTigerProxyHealthy(url)) {
+  protected String waitForRemoteTigerProxyToBeOnline(String url) {
+    final var candidateUrls = expandUrlWithIpv4Candidates(url);
+    final var pollingStart = LocalDateTime.now();
+    while (!isShuttingDown) {
+      final var reachableCandidate =
+          candidateUrls.stream().filter(this::isGivenTigerProxyHealthy).findFirst();
+      if (reachableCandidate.isPresent()) {
+        final var candidateUrl = reachableCandidate.get();
+        if (!candidateUrl.equals(url)) {
+          log.info(
+              "Remote proxy endpoint '{}' not reachable, using IPv4 fallback '{}'",
+              url,
+              candidateUrl);
+        }
+        return candidateUrl;
+      }
       try {
         Thread.sleep(500);
       } catch (InterruptedException e) {
@@ -328,6 +348,57 @@ public abstract class AbstractTigerProxy implements ITigerProxy, AutoCloseable {
     }
     if (isShuttingDown) {
       log.warn("Aborting waitForRemoteTigerProxyToBeOnline at '{}'", url);
+      return url;
+    }
+    return url;
+  }
+
+  static List<String> expandUrlWithIpv4Candidates(String url) {
+    final var candidateUrls = new LinkedHashSet<String>();
+    candidateUrls.add(url);
+
+    final URI uri;
+    try {
+      uri = URI.create(url);
+    } catch (IllegalArgumentException e) {
+      return List.copyOf(candidateUrls);
+    }
+
+    final var host = uri.getHost();
+    if (StringUtils.isBlank(host) || isIpLiteral(host)) {
+      return List.copyOf(candidateUrls);
+    }
+
+    try {
+      candidateUrls.addAll(
+          List.of(InetAddress.getAllByName(host)).stream()
+              .filter(Inet4Address.class::isInstance)
+              .map(InetAddress::getHostAddress)
+              .map(ipv4Address -> replaceHost(uri, ipv4Address))
+              .collect(Collectors.toCollection(LinkedHashSet::new)));
+    } catch (UnknownHostException e) {
+      return List.copyOf(candidateUrls);
+    }
+    return List.copyOf(candidateUrls);
+  }
+
+  private static boolean isIpLiteral(String host) {
+    return host.contains(":") || host.matches("\\d+\\.\\d+\\.\\d+\\.\\d+");
+  }
+
+  private static String replaceHost(URI uri, String newHost) {
+    try {
+      return new URI(
+              uri.getScheme(),
+              uri.getUserInfo(),
+              newHost,
+              uri.getPort(),
+              uri.getPath(),
+              uri.getQuery(),
+              uri.getFragment())
+          .toString();
+    } catch (URISyntaxException e) {
+      return uri.toString();
     }
   }
 

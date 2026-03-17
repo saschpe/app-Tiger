@@ -30,6 +30,7 @@ import static de.gematik.test.tiger.mockserver.socket.tls.SniHandler.SERVER_IDEN
 import static de.gematik.test.tiger.mockserver.socket.tls.SniHandler.getAlpnProtocol;
 
 import de.gematik.test.tiger.common.pki.TigerPkiIdentity;
+import de.gematik.test.tiger.mockserver.codec.Http2PipelineHelper;
 import de.gematik.test.tiger.mockserver.codec.MockServerHttpServerCodec;
 import de.gematik.test.tiger.mockserver.configuration.MockServerConfiguration;
 import de.gematik.test.tiger.mockserver.model.HttpProtocol;
@@ -50,8 +51,6 @@ import io.netty.handler.codec.http.HttpContentDecompressor;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpServerCodec;
-import io.netty.handler.codec.http2.*;
-import io.netty.handler.logging.LogLevel;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslHandler;
 import lombok.extern.slf4j.Slf4j;
@@ -124,13 +123,18 @@ public final class HttpConnectHandler extends RelayConnectHandler<HttpRequest> {
               .newHandler(forwardProxyCtx.alloc(), host, port));
     }
 
-    pipeline.addLast(
-        new HttpClientCodec(
-            getConfiguration().maxInitialLineLength(),
-            getConfiguration().maxHeaderSize(),
-            getConfiguration().maxChunkSize()));
-    pipeline.addLast(new HttpContentDecompressor());
-    pipeline.addLast(new HttpObjectAggregator(Integer.MAX_VALUE));
+    if (httpProtocol == HTTP_2) {
+      addHttp2ClientCodecs(pipeline);
+    } else {
+      pipeline.addLast(
+          new HttpClientCodec(
+              getConfiguration().maxInitialLineLength(),
+              getConfiguration().maxHeaderSize(),
+              getConfiguration().maxChunkSize()));
+      pipeline.addLast(new HttpContentDecompressor());
+      // TODO: make max content length configurable instead of Integer.MAX_VALUE
+      pipeline.addLast(new HttpObjectAggregator(Integer.MAX_VALUE));
+    }
     pipeline.addLast(new DownstreamProxyRelayHandler(proxyClientCtx.channel()));
   }
 
@@ -170,24 +174,25 @@ public final class HttpConnectHandler extends RelayConnectHandler<HttpRequest> {
   }
 
   private void addHttp2Codecs(ChannelPipeline pipeline) {
-    Http2Connection connection = new DefaultHttp2Connection(true);
-    HttpToHttp2ConnectionHandlerBuilder handlerBuilder =
-        new HttpToHttp2ConnectionHandlerBuilder()
-            .frameListener(
-                new DelegatingDecompressorFrameListener(
-                    connection,
-                    new InboundHttp2ToHttpAdapterBuilder(connection)
-                        .maxContentLength(Integer.MAX_VALUE)
-                        .propagateSettings(true)
-                        .validateHttpHeaders(false)
-                        .build()));
+    Http2PipelineHelper.addHttp2Codecs(
+        pipeline,
+        true,
+        false,
+        HttpConnectHandler.class,
+        getConfiguration().http2FrameParsingActive()
+            ? getConfiguration().binaryProxyListener()
+            : null);
+  }
 
-    if (log.isTraceEnabled()) {
-      handlerBuilder.frameLogger(
-          new Http2FrameLogger(LogLevel.TRACE, HttpConnectHandler.class.getName()));
-    }
-
-    pipeline.addLast(handlerBuilder.connection(connection).build());
+  private void addHttp2ClientCodecs(ChannelPipeline pipeline) {
+    Http2PipelineHelper.addHttp2Codecs(
+        pipeline,
+        false,
+        true,
+        HttpConnectHandler.class,
+        getConfiguration().http2FrameParsingActive()
+            ? getConfiguration().binaryProxyListener()
+            : null);
   }
 
   private void addHttp1Codecs(ChannelPipeline pipeline) {
@@ -197,6 +202,7 @@ public final class HttpConnectHandler extends RelayConnectHandler<HttpRequest> {
             getConfiguration().maxHeaderSize(),
             getConfiguration().maxChunkSize()));
     pipeline.addLast(new HttpContentDecompressor());
+    // TODO: make max content length configurable instead of Integer.MAX_VALUE
     pipeline.addLast(new HttpObjectAggregator(Integer.MAX_VALUE));
   }
 

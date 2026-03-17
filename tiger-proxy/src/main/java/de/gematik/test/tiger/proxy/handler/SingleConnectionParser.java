@@ -60,6 +60,7 @@ public class SingleConnectionParser {
   private final org.slf4j.Logger log;
 
   private String lastMessageUuid = null;
+  private java.time.ZonedDateTime lastMessageTimestamp = null;
 
   public SingleConnectionParser(
       TcpIpConnectionIdentifier connectionIdentifier,
@@ -78,17 +79,23 @@ public class SingleConnectionParser {
   }
 
   private void setMessageRemovalCallbacks(AbstractTigerProxy tigerProxy) {
-    this.rbelConverter.addClearHistoryCallback(() -> lastMessageUuid = null);
+    this.rbelConverter.addClearHistoryCallback(
+        () -> {
+          lastMessageUuid = null;
+          lastMessageTimestamp = null;
+        });
     this.rbelConverter.addMessageRemovedFromHistoryCallback(
         element -> {
           if (element.getUuid().equals(lastMessageUuid)) {
             lastMessageUuid = null;
+            lastMessageTimestamp = null;
           }
         });
     tigerProxy.addRemovedMessageUuidsHandler(
         uuids -> {
           if (lastMessageUuid != null && uuids.contains(lastMessageUuid)) {
             lastMessageUuid = null;
+            lastMessageTimestamp = null;
           }
         });
   }
@@ -194,6 +201,12 @@ public class SingleConnectionParser {
       val message = tryToConvertMessage();
       if (message.isPresent()) {
         lastMessageUuid = message.get().getUuid();
+        lastMessageTimestamp =
+            message
+                .get()
+                .getFacet(RbelMessageMetadata.class)
+                .flatMap(RbelMessageMetadata::getTransmissionTime)
+                .orElse(null);
         bufferedParts.consume(message.get().getSize());
         result.add(message.get());
       } else {
@@ -231,6 +244,10 @@ public class SingleConnectionParser {
     final var messageMetadata = readMetadataFromBufferedContent(bufferedContent);
     if (lastMessageUuid != null) {
       RbelMessageMetadata.PREVIOUS_MESSAGE_UUID.putValue(messageMetadata, lastMessageUuid);
+      if (lastMessageTimestamp != null) {
+        RbelMessageMetadata.PREVIOUS_MESSAGE_TIMESTAMP.putValue(
+            messageMetadata, lastMessageTimestamp);
+      }
       log.atTrace()
           .addArgument(messageElement::getUuid)
           .addArgument(lastMessageUuid)
@@ -297,6 +314,9 @@ public class SingleConnectionParser {
             .withSender(bufferedContent.getConnectionIdentifier().sender())
             .withReceiver(bufferedContent.getConnectionIdentifier().receiver());
     bufferedContent.getAdditionalData().forEach(metadata::addMetadata);
+    if (bufferedContent.getMessageKind() != null) {
+      RbelMessageMetadata.MESSAGE_KIND.putValue(metadata, bufferedContent.getMessageKind());
+    }
     return metadata;
   }
 

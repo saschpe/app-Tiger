@@ -62,6 +62,8 @@ public class TigerGlobalConfiguration {
       new TigerConfigurationLoader();
   private static final int NUMBER_OF_FREE_PORTS = 256;
   public static final String ADDITIONAL_CONFIGURATION_FILES = "additionalConfigurationFiles";
+  private static final List<String> TIGER_YAML_CANDIDATES = List.of("tiger.yaml", "tiger.yml");
+  private static final List<String> STOP_MARKERS = List.of(".git", ".hg", ".svn");
   @Getter @Setter private static boolean requireTigerYaml = false;
   private static boolean initialized = false;
 
@@ -145,13 +147,13 @@ public class TigerGlobalConfiguration {
     return "tiger-" + profile + ".yaml";
   }
 
-  private static String findBasePathOfMainTigerYaml() {
+  private static Path findBasePathOfMainTigerYaml() {
     return TIGER_TESTENV_CFGFILE_LOCATION
         .getValue()
-        .map(File::new)
-        .map(File::getParentFile)
-        .map(f -> f.getAbsolutePath() + "/")
-        .orElse("");
+        .map(Path::of)
+        .map(Path::getParent)
+        .or(() -> TIGER_ROOT_FOLDER.getValue().map(Path::of))
+        .orElse(Path.of("."));
   }
 
   private static void addFixedPortVariables(List<Integer> fixedPorts) {
@@ -395,38 +397,55 @@ public class TigerGlobalConfiguration {
       return;
     }
 
-    final Optional<File> customCfgFile = TIGER_TESTENV_CFGFILE_LOCATION.getValue().map(File::new);
-
-    if (customCfgFile.isPresent()) {
-      if (customCfgFile.get().exists()) {
-        readYamlFile(
-            customCfgFile.get(),
-            Optional.of(TIGER_BASEKEY),
-            ConfigurationValuePrecedence.MAIN_YAML);
-        setRootFolderNormalized(customCfgFile);
-        return;
-      } else {
-        throw new TigerConfigurationException(
-            "Could not find configuration-file '" + customCfgFile.get().getAbsolutePath() + "'.");
-      }
-    }
-
-    final Optional<File> mainCfgFile =
-        Stream.of(TIGER_TESTENV_CFGFILE_LOCATION.getValue().orElse(null), "tiger.yaml", "tiger.yml")
-            .filter(Objects::nonNull)
-            .map(File::new)
-            .filter(File::exists)
-            .findFirst();
+    final Optional<Path> mainCfgFile = locateTigerYamlFile();
     if (mainCfgFile.isPresent()) {
-      setRootFolderNormalized(mainCfgFile);
+      setRootFolderNormalized(mainCfgFile.map(Path::toFile));
       readYamlFile(
-          mainCfgFile.get(), Optional.of(TIGER_BASEKEY), ConfigurationValuePrecedence.MAIN_YAML);
+          mainCfgFile.get().toFile(),
+          Optional.of(TIGER_BASEKEY),
+          ConfigurationValuePrecedence.MAIN_YAML);
       return;
     }
-
     if (requireTigerYaml) {
       throw new TigerConfigurationException("Could not find configuration-file 'tiger.yaml'.");
     }
+  }
+
+  /** Locates the tiger YAML file, searching upward from the current working directory. */
+  protected static Optional<Path> locateTigerYamlFile() {
+    return locateTigerYamlFile(Path.of(".").toAbsolutePath().normalize());
+  }
+
+  /** Locates the tiger YAML file, searching upward from {@code startDir}. */
+  static Optional<Path> locateTigerYamlFile(Path startDir) {
+    Optional<String> explicitLocation = TIGER_TESTENV_CFGFILE_LOCATION.getValue();
+    if (explicitLocation.isPresent()) {
+      Path configPath = Path.of(explicitLocation.get());
+      if (configPath.toFile().exists()) {
+        return Optional.of(configPath);
+      }
+      throw new TigerConfigurationException(
+          "Could not find configuration-file '" + configPath.toAbsolutePath() + "'.");
+    }
+
+    Path dir = startDir.toAbsolutePath().normalize();
+    while (dir != null) {
+      for (String candidate : TIGER_YAML_CANDIDATES) {
+        Path resolved = dir.resolve(candidate);
+        if (resolved.toFile().exists()) {
+          return Optional.of(resolved);
+        }
+      }
+      if (isStopDirectory(dir)) {
+        break;
+      }
+      dir = dir.getParent();
+    }
+    return Optional.empty();
+  }
+
+  private static boolean isStopDirectory(Path dir) {
+    return STOP_MARKERS.stream().anyMatch(marker -> dir.resolve(marker).toFile().exists());
   }
 
   private static void setRootFolderNormalized(Optional<File> customCfgFile) {
@@ -471,30 +490,17 @@ public class TigerGlobalConfiguration {
     }
   }
 
-  private static Path findAdditionalConfigurationFile(String filename) {
-    Optional<Path> configFileLocation = TIGER_TESTENV_CFGFILE_LOCATION.getValue().map(Path::of);
-
-    if (configFileLocation.isPresent()) {
-      val yamlRelativeToTigerYaml = configFileLocation.get().resolveSibling(filename);
-      if (yamlRelativeToTigerYaml.toFile().exists()) {
-        return yamlRelativeToTigerYaml;
-      }
+  static Path findAdditionalConfigurationFile(String filename) {
+    Path resolved = resolveRelativePathToTigerYaml(filename);
+    if (!resolved.toFile().exists()) {
+      throw new TigerConfigurationException(
+          "The file "
+              + resolved
+              + " is not found. (resolved "
+              + filename
+              + " relative to tiger yaml location)");
     }
-
-    Path currentDirectory = Path.of(".");
-    val yamlRelativeToWorkingDirectory = currentDirectory.resolveSibling(filename);
-    if (yamlRelativeToWorkingDirectory.toFile().exists()) {
-      return yamlRelativeToWorkingDirectory;
-    }
-
-    throw new TigerConfigurationException(
-        "The file "
-            + filename
-            + " relative to parent folder of tiger.yaml "
-            + configFileLocation
-            + " or current working directory "
-            + currentDirectory
-            + " is not found.");
+    return resolved;
   }
 
   static String getComputerName() {
@@ -611,10 +617,11 @@ public class TigerGlobalConfiguration {
         .ifPresent(globalConfigurationLoader::removeConfigurationSource);
   }
 
-  public static Path resolveRelativePathToTigerYaml(String relativePath) {
-    return Path.of(TigerGlobalConfiguration.findBasePathOfMainTigerYaml())
-        .resolve(relativePath)
-        .normalize()
-        .toAbsolutePath();
+  public static Path resolveRelativePathToTigerYaml(String path) {
+    Path candidate = Path.of(path);
+    if (candidate.isAbsolute()) {
+      return candidate.normalize();
+    }
+    return findBasePathOfMainTigerYaml().resolve(candidate).normalize().toAbsolutePath();
   }
 }

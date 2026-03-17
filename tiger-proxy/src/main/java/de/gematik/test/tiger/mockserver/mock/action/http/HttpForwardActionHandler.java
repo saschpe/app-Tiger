@@ -46,14 +46,13 @@ public class HttpForwardActionHandler {
 
   public HttpForwardActionResult sendRequest(HttpRequest request, Channel incomingChannel) {
     try {
-      // TODO(jamesdbloom) support proxying via HTTP2, for now always force into HTTP1
+      // Preserve the incoming protocol so the proxy is transparent: if the client
+      // speaks h2, we forward as h2. If the backend doesn't support it, the connection
+      // fails — same as without the proxy.
       return new HttpForwardActionResult(
           request,
           httpClient.sendRequest(
-              new HttpRequestInfo(
-                  incomingChannel,
-                  hopByHopHeaderFilter.onRequest(request).setProtocol(null),
-                  null)),
+              new HttpRequestInfo(incomingChannel, hopByHopHeaderFilter.onRequest(request), null)),
           null,
           null);
     } catch (Exception e) {

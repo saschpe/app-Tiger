@@ -47,8 +47,12 @@ public class RbelMessageMetadata implements RbelFacet {
       new RbelMetadataValue<>("timestamp", ZonedDateTime.class);
   public static final RbelMetadataValue<String> PREVIOUS_MESSAGE_UUID =
       new RbelMetadataValue<>("previousMessageUuid", String.class);
+  public static final RbelMetadataValue<ZonedDateTime> PREVIOUS_MESSAGE_TIMESTAMP =
+      new RbelMetadataValue<>("previousMessageTimestamp", ZonedDateTime.class);
   public static final RbelMetadataValue<String> PAIRED_MESSAGE_UUID =
       new RbelMetadataValue<>("pairedMessageUuid", String.class);
+  public static final RbelMetadataValue<RbelMessageKind> MESSAGE_KIND =
+      new RbelMetadataValue<>("messageKind", RbelMessageKind.class);
   private static final ObjectMapper MAPPER =
       new ObjectMapper().registerModule(new JavaTimeModule());
 

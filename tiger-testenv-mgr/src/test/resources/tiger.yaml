@@ -1,9 +1,9 @@
 tigerProxy:
 additionalConfigurationFiles:
-  - filename: src/test/resources/additionalYamlsNotCurrentDir/foo/bar/additionalYaml.yaml
+  - filename: additionalYamlsNotCurrentDir/foo/bar/additionalYaml.yaml
     baseKey: rootFolder
 
-  - filename: src/test/resources/additionalYamlsNotCurrentDir/additionalYaml.yaml
+  - filename: additionalYamlsNotCurrentDir/additionalYaml.yaml
     baseKey: rootFolderNested
 
   - filename: additionalYaml.yaml

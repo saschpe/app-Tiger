@@ -46,6 +46,10 @@ import de.gematik.test.tiger.proxy.handler.MultipleBinaryConnectionParser;
 import de.gematik.test.tiger.proxy.handler.SingleConnectionParser;
 import jakarta.websocket.ContainerProvider;
 import jakarta.websocket.WebSocketContainer;
+import java.net.InetAddress;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.UnknownHostException;
 import java.time.Duration;
 import java.time.ZonedDateTime;
 import java.util.*;
@@ -81,6 +85,8 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
   public static final String WS_DATA = "/topic/data";
   public static final String WS_ERRORS = "/topic/errors";
   @Getter private final String remoteProxyUrl;
+  @Getter private String connectedRemoteProxyUrl;
+  private final String remoteProxyControlUrl;
   private final WebSocketStompClient tigerProxyStompClient;
 
   @Getter private final List<TigerExceptionDto> receivedRemoteExceptions = new ArrayList<>();
@@ -124,6 +130,8 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
       @Nullable TigerProxy masterTigerProxy) {
     super(configuration, masterTigerProxy == null ? null : masterTigerProxy.getRbelLogger());
     this.remoteProxyUrl = remoteProxyUrl;
+    this.remoteProxyControlUrl = normalizeLoopbackRemoteProxyUrl(remoteProxyUrl);
+    this.connectedRemoteProxyUrl = this.remoteProxyControlUrl;
     this.masterTigerProxy = masterTigerProxy;
     this.binaryChunksBuffer =
         new MultipleBinaryConnectionParser(
@@ -174,6 +182,36 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
     return remoteProxyUrl.replaceFirst("http", "ws") + "/tracing";
   }
 
+  static String normalizeLoopbackRemoteProxyUrl(String remoteProxyUrl) {
+    try {
+      URI uri = new URI(remoteProxyUrl);
+      if (uri.getHost() == null) {
+        return remoteProxyUrl;
+      }
+
+      InetAddress inetAddress = InetAddress.getByName(uri.getHost());
+      if (!inetAddress.isLoopbackAddress() || "localhost".equalsIgnoreCase(uri.getHost())) {
+        return remoteProxyUrl;
+      }
+
+      return new URI(
+              uri.getScheme(),
+              uri.getUserInfo(),
+              "localhost",
+              uri.getPort(),
+              uri.getPath(),
+              uri.getQuery(),
+              uri.getFragment())
+          .toString();
+    } catch (URISyntaxException | UnknownHostException e) {
+      return remoteProxyUrl;
+    }
+  }
+
+  String getRemoteProxyControlUrl() {
+    return remoteProxyControlUrl;
+  }
+
   private void downloadTrafficFromRemoteProxy() {
     new TigerRemoteTrafficDownloader(this).execute();
   }
@@ -185,12 +223,12 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
     if (isShuttingDown()) {
       return;
     }
-    waitForRemoteTigerProxyToBeOnline(remoteProxyUrl);
+    connectedRemoteProxyUrl = waitForRemoteTigerProxyToBeOnline(remoteProxyControlUrl);
     if (isShuttingDown()) {
       return;
     }
-    log.info("remote proxy at {} is online, now connecting...", remoteProxyUrl);
-    final String tracingWebSocketUrl = getTracingWebSocketUrl(remoteProxyUrl);
+    log.info("remote proxy at {} is online, now connecting...", connectedRemoteProxyUrl);
+    final var tracingWebSocketUrl = getTracingWebSocketUrl(connectedRemoteProxyUrl);
     tigerProxyStompClient
         .connectAsync(tracingWebSocketUrl, tigerStompSessionHandler)
         .orTimeout(connectionTimeoutInSeconds, TimeUnit.SECONDS)
@@ -200,16 +238,18 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
                   "Successfully opened stomp session {} to url {}",
                   stompSessionInCallback.getSessionId(),
                   tracingWebSocketUrl);
+              webSocketConnectionStartTime.set(ZonedDateTime.now());
               tigerStompSessionHandler.setOnConnectedCallback(
                   () -> {
                     log.info(
                         "Connected to remote proxy at {}, now downloading traffic...",
-                        remoteProxyUrl);
+                        connectedRemoteProxyUrl);
                     if (downloadTraffic) {
                       downloadTrafficFromRemoteProxy();
                     }
                     log.info(
-                        "Successfully downloaded traffic from remote proxy at {}", remoteProxyUrl);
+                        "Successfully downloaded traffic from remote proxy at {}",
+                        connectedRemoteProxyUrl);
                   });
               return stompSessionInCallback;
             })
@@ -224,7 +264,7 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
 
   @Override
   public TigerProxyRoute addRoute(TigerProxyRoute tigerRoute) {
-    return Unirest.put(remoteProxyUrl + "/route")
+    return Unirest.put(getBaseUrl() + "/route")
         .body(tigerRoute)
         .contentType(MediaType.APPLICATION_JSON_VALUE)
         .asObject(TigerProxyRoute.class)
@@ -243,8 +283,8 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
   public void removeRoute(String routeId) {
     Assert.hasText(routeId, () -> "No route ID given!");
 
-    final Optional<Boolean> isInternalOptional =
-        Unirest.get(remoteProxyUrl + "/route")
+    final var isInternalOptional =
+        Unirest.get(getBaseUrl() + "/route")
             .asObject(new GenericType<List<TigerProxyRoute>>() {})
             .getBody()
             .stream()
@@ -260,7 +300,7 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
           "Could not delete route with id '" + routeId + "': Is internal route!");
     }
 
-    Unirest.delete(remoteProxyUrl + "/route/" + routeId)
+    Unirest.delete(getBaseUrl() + "/route/" + routeId)
         .asString()
         .ifFailure(
             httpResponse -> {
@@ -271,7 +311,7 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
 
   @Override
   public void clearAllRoutes() {
-    Unirest.get(remoteProxyUrl + "/route")
+    Unirest.get(getBaseUrl() + "/route")
         .asObject(new GenericType<List<TigerProxyRoute>>() {})
         .getBody()
         .stream()
@@ -282,7 +322,7 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
 
   @Override
   public String getBaseUrl() {
-    return remoteProxyUrl;
+    return connectedRemoteProxyUrl;
   }
 
   @Override
@@ -292,7 +332,7 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
 
   @Override
   public List<TigerProxyRoute> getRoutes() {
-    return Unirest.get(remoteProxyUrl + "/route")
+    return Unirest.get(getBaseUrl() + "/route")
         .asObject(new GenericType<List<TigerProxyRoute>>() {})
         .ifFailure(
             response -> {
@@ -307,7 +347,7 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
 
   @Override
   public RbelModificationDescription addModificaton(RbelModificationDescription modification) {
-    return Unirest.put(remoteProxyUrl + "/modification")
+    return Unirest.put(getBaseUrl() + "/modification")
         .body(modification)
         .contentType(MediaType.APPLICATION_JSON_VALUE)
         .asObject(RbelModificationDescription.class)
@@ -324,7 +364,7 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
 
   @Override
   public List<RbelModificationDescription> getModifications() {
-    return Unirest.get(remoteProxyUrl + "/modification")
+    return Unirest.get(getBaseUrl() + "/modification")
         .asObject(new GenericType<List<RbelModificationDescription>>() {})
         .ifFailure(
             response -> {
@@ -340,7 +380,7 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
   @Override
   public void removeModification(String modificationName) {
     Assert.hasText(modificationName, () -> "No modification name given!");
-    Unirest.delete(remoteProxyUrl + "/modification/" + modificationName)
+    Unirest.delete(getBaseUrl() + "/modification/" + modificationName)
         .asEmpty()
         .ifFailure(
             httpResponse -> {
@@ -352,7 +392,10 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
   void tryParseMessages(PartialTracingMessage message, Consumer<RbelElement> messagePreProcessor) {
     var messageUuid = message.getTracingDto().getMessageUuid();
     log.trace("Trying to parse message with UUID {}", messageUuid);
-    if (getRbelLogger().getRbelConverter().getKnownMessageUuids().add(messageUuid)) {
+    if (!getRbelLogger()
+        .getRbelConverter()
+        .getKnownMessageUuids()
+        .isAlreadyConverted(messageUuid)) {
       getBinaryChunksBuffer()
           .addToBuffer(
               messageUuid,
@@ -415,6 +458,12 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
         retrieveOrInitializePartialMessage(
             tracingMessagePart.getUuid(), PartialTracingMessage.builder().build());
 
+    if (tracingMessage == null) {
+      log.atTrace()
+          .addArgument(tracingMessagePart::getUuid)
+          .log("Discarding message part for already-known message {}");
+      return;
+    }
     tracingMessage.addMessagePart(tracingMessagePart);
     checkForCompletion(tracingMessage, tracingMessagePart.getUuid());
   }
@@ -424,6 +473,9 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
     synchronized (partiallyReceivedMessageMap) {
       if (partiallyReceivedMessageMap.containsKey(uuid)) {
         return partiallyReceivedMessageMap.get(uuid);
+      }
+      if (!getRbelLogger().getRbelConverter().getKnownMessageUuids().add(uuid)) {
+        return null; // already known (downloaded or earlier push) — discard
       }
       partiallyReceivedMessageMap.put(uuid, message);
       return message;
@@ -435,6 +487,9 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
     synchronized (partiallyReceivedMessageMap) {
       if (partiallyReceivedMessageMap.containsKey(uuid)) {
         oldMessage = partiallyReceivedMessageMap.get(uuid);
+      } else if (!getRbelLogger().getRbelConverter().getKnownMessageUuids().add(uuid)) {
+        log.trace("Discarding metadata for already-known message {}", uuid);
+        return;
       }
       partiallyReceivedMessageMap.put(uuid, partialTracingMessage);
     }
@@ -517,6 +572,14 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
    */
   private final RingBufferHashSet<String> removedMessageUuids = new RingBufferHashSet<>(10_000);
 
+  /**
+   * When this WebSocket connection started delivering messages. Used for timestamp-based detection
+   * of messages from previous proxy instances.
+   */
+  @Getter
+  private final AtomicReference<ZonedDateTime> webSocketConnectionStartTime =
+      new AtomicReference<>();
+
   private void handleMessageRemovalFromHistory(RbelElement element) {
     if (!element.hasFacet(NextMessageParsedFacet.class)) {
       removedMessageUuids.add(element.getUuid());
@@ -532,6 +595,14 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
 
   public void scheduleAfterMessage(
       String previousMessageUuid, Runnable parseMessageTask, String thisMessageUuid) {
+    scheduleAfterMessage(previousMessageUuid, parseMessageTask, thisMessageUuid, null);
+  }
+
+  public void scheduleAfterMessage(
+      String previousMessageUuid,
+      Runnable parseMessageTask,
+      String thisMessageUuid,
+      @Nullable ZonedDateTime previousMessageTimestamp) {
     synchronized (parsingTasksWaitingForUuid) {
       if (removedMessageUuids.contains(previousMessageUuid)) {
         log.trace(
@@ -542,6 +613,7 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
         removedMessageUuids.remove(previousMessageUuid);
         return;
       }
+
       Optional<RbelElement> previousMessage =
           getRbelLogger().getRbelConverter().findMessageByUuid(previousMessageUuid);
       final Optional<RbelConversionPhase> previousMessageConversionPhase =
@@ -555,27 +627,83 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
             previousMessageConversionPhase);
         previousMessage.ifPresent(msg -> msg.addFacet(new NextMessageParsedFacet()));
         meshHandlerPool.submit(parseMessageTask);
-      } else {
-        log.atTrace()
-            .addArgument(thisMessageUuid)
-            .addArgument(previousMessageUuid)
-            .addArgument(previousMessageConversionPhase)
-            .addArgument(parsingTasksWaitingForUuid::size)
-            .addArgument(
-                () ->
-                    parsingTasksWaitingForUuid.entries().stream()
-                        .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().size())))
-            .log(
-                "Queueing {} behind {} ({}), currently {} messages waiting ({}) from {}",
-                remoteProxyUrl);
-        parsingTasksWaitingForUuid
-            .getOrPutDefault(previousMessageUuid, LinkedList::new)
-            .add(parseMessageTask);
+        return;
+      }
 
-        scheduleDirectParsingIfPreviousMessageHasNotEvenPartiallyArrived(
-            thisMessageUuid, previousMessageUuid, parseMessageTask);
+      if (previousMessageTimestamp != null
+          && previousMessage.isEmpty()
+          && scheduleDirectlyAfterOldPreviousMessage(
+              parseMessageTask, thisMessageUuid, previousMessageTimestamp)) {
+        return;
+      }
+      log.atTrace()
+          .addArgument(thisMessageUuid)
+          .addArgument(previousMessageUuid)
+          .addArgument(previousMessageConversionPhase)
+          .addArgument(parsingTasksWaitingForUuid::size)
+          .addArgument(
+              () ->
+                  parsingTasksWaitingForUuid.entries().stream()
+                      .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().size())))
+          .log(
+              "Queueing {} behind {} ({}), currently {} messages waiting ({}) from {}",
+              remoteProxyUrl);
+      parsingTasksWaitingForUuid
+          .getOrPutDefault(previousMessageUuid, LinkedList::new)
+          .add(parseMessageTask);
+    }
+    scheduleDirectParsingIfPreviousMessageHasNotEvenPartiallyArrived(
+        thisMessageUuid, previousMessageUuid, parseMessageTask);
+  }
+
+  private boolean scheduleDirectlyAfterOldPreviousMessage(
+      Runnable parseMessageTask, String thisMessageUuid, ZonedDateTime previousMessageTimestamp) {
+    // Early detection of "will never arrive" using timestamp heuristic
+
+    ZonedDateTime connectionStart = webSocketConnectionStartTime.get();
+    if (connectionStart != null) {
+      ZonedDateTime now = ZonedDateTime.now();
+      Duration timeSinceConnectionStart = Duration.between(connectionStart, now);
+      Duration timeSincePreviousMessage = Duration.between(previousMessageTimestamp, now);
+
+      // Use configurable thresholds from proxy configuration
+      Duration gracePeriod =
+          Duration.ofMillis(
+              (long)
+                  (getTigerProxyConfiguration()
+                          .getPreviousMessageTimeoutDetectionGracePeriodInSeconds()
+                      * 1000));
+      Duration timeGapThreshold =
+          Duration.ofMillis(
+              (long)
+                  (getTigerProxyConfiguration()
+                          .getPreviousMessageTimeoutDetectionTimeGapThresholdInSeconds()
+                      * 1000));
+      Duration recentConnectionThreshold =
+          Duration.ofMillis(
+              (long)
+                  (getTigerProxyConfiguration()
+                          .getPreviousMessageTimeoutDetectionRecentConnectionThresholdInMinutes()
+                      * 60
+                      * 1000));
+
+      if (previousMessageTimestamp.isBefore(connectionStart.minus(gracePeriod))
+          && (timeSincePreviousMessage.compareTo(timeGapThreshold) > 0
+              && timeSinceConnectionStart.compareTo(recentConnectionThreshold) < 0)) {
+        log.atDebug()
+            .addArgument(thisMessageUuid)
+            .addArgument(previousMessageTimestamp)
+            .addArgument(connectionStart)
+            .addArgument(timeSincePreviousMessage::toMinutes)
+            .addArgument(timeSinceConnectionStart::getSeconds)
+            .log(
+                "parsing {} immediately, prev message timestamp {} predates connection start {} "
+                    + "or shows large time gap (prev: {}min ago, connection: {}sec ago)");
+        meshHandlerPool.submit(parseMessageTask);
+        return true;
       }
     }
+    return false;
   }
 
   private void scheduleDirectParsingIfPreviousMessageHasNotEvenPartiallyArrived(

@@ -210,7 +210,7 @@ public class MockServerTlsConfigurator {
                             Protocol.ALPN,
                             SelectorFailureBehavior.NO_ADVERTISE,
                             SelectedListenerFailureBehavior.ACCEPT,
-                            List.of("http/1.1")));
+                            List.of("h2", "http/1.1")));
                   });
 
           return builder;

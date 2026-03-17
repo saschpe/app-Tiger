@@ -21,6 +21,7 @@
 package de.gematik.test.tiger.mockserver.configuration;
 
 import de.gematik.rbellogger.RbelConverter;
+import de.gematik.test.tiger.mockserver.model.HttpRequest;
 import de.gematik.test.tiger.mockserver.proxyconfiguration.ProxyConfiguration;
 import de.gematik.test.tiger.mockserver.socket.tls.KeyAlgorithmPreference;
 import de.gematik.test.tiger.mockserver.socket.tls.KeyAndCertificateFactory;
@@ -75,12 +76,17 @@ public class MockServerConfiguration {
 
   // non http proxying
   private BinaryExchangeHandler binaryProxyListener = null;
+
+  /** Derived from {@code activateRbelParsingFor.contains("http2frames")} */
+  private boolean http2FrameParsingActive = false;
+
   private boolean enableTlsTermination = true;
   private List<RbelBinaryModifierPlugin> binaryModifierPlugins;
 
   // callbacks
   private BiConsumer<TigerProxyRoutingException, ChannelHandlerContext> exceptionHandlingCallback =
       (x, y) -> {};
+  private Consumer<HttpRequest> connectMessageLogger = request -> {};
 
   // proxy
   private ProxyConfiguration proxyConfiguration = null;

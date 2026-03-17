@@ -496,6 +496,8 @@ class TestTigerProxyModifications extends AbstractTigerProxyTest {
     Unirest.get("http://localhost:" + tigerProxy.getProxyPort() + "/echo")
         .header("FOO", "bar")
         .asString();
+
+    awaitMessagesInTigerProxy(2);
     assertThat(tigerProxy.getRbelMessagesList().get(0))
         .extractChildWithPath("$.header.extra-foo")
         .hasStringContentEqualTo("bar-modified");
@@ -514,6 +516,7 @@ class TestTigerProxyModifications extends AbstractTigerProxyTest {
                         .build()))
             .build());
     Unirest.get("http://localhost:" + tigerProxy.getProxyPort() + "/echo").asString();
+    awaitMessagesInTigerProxy(2);
     assertThat(tigerProxy.getRbelMessagesList()).hasSize(2);
   }
 
@@ -532,6 +535,8 @@ class TestTigerProxyModifications extends AbstractTigerProxyTest {
     Unirest.get("http://localhost:" + tigerProxy.getProxyPort() + "/echo")
         .header("FOO", "bar")
         .asString();
+
+    awaitMessagesInTigerProxy(2);
     assertThat(tigerProxy.getRbelMessagesList().get(0))
         .extractChildWithPath("$.header.[~'user-agent']")
         .hasStringContentEqualTo("bar-modified");
@@ -552,6 +557,8 @@ class TestTigerProxyModifications extends AbstractTigerProxyTest {
     Unirest.get("http://localhost:" + tigerProxy.getProxyPort() + "/echo")
         .header("json-header", "{'foo':'bar'}")
         .asString();
+
+    awaitMessagesInTigerProxy(2);
     assertThat(tigerProxy.getRbelMessagesList().get(0))
         .extractChildWithPath("$.header.[~'json-header']")
         .hasStringContentEqualTo("bar-modified");

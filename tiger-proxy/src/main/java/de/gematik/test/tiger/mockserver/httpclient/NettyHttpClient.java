@@ -96,14 +96,6 @@ public class NettyHttpClient {
       modifyProxyInformation(requestInfo);
     }
 
-    if (HttpProtocol.HTTP_2.equals(requestInfo.getDataToSend().getProtocol())
-        && Boolean.FALSE.equals(requestInfo.getDataToSend().isSecure())) {
-      log.warn(
-          "HTTP2 requires ALPN but request is not secure (i.e. TLS) so protocol changed"
-              + " to HTTP1");
-      requestInfo.getDataToSend().setProtocol(HttpProtocol.HTTP_1_1);
-    }
-
     final CompletableFuture<HttpResponse> httpResponseFuture = new CompletableFuture<>();
     final CompletableFuture<Message> responseFuture = new CompletableFuture<>();
     final HttpProtocol httpProtocol =

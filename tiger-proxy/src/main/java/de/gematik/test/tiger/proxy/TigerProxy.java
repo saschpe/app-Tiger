@@ -55,8 +55,10 @@ import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
+import java.time.ZonedDateTime;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import javax.net.ssl.SSLContext;
@@ -182,7 +184,22 @@ public class TigerProxy extends AbstractTigerProxy implements AutoCloseable, Rbe
     proxyConfiguration.ifPresent(mockServerConfiguration::proxyConfiguration);
     mockServerConfiguration.exceptionHandlingCallback(
         getMockServerToRbelConverter().exceptionCallback());
+    if (getTigerProxyConfiguration().isLogConnectMessages()) {
+      // TODO: Also log the CONNECT 200 response. This requires hooking into
+      //  RelayConnectHandler.setupLocalTunnel() after the success response is sent.
+      mockServerConfiguration.connectMessageLogger(
+          request ->
+              getMockServerToRbelConverter()
+                  .convertRequest(
+                      request,
+                      request.getPath(),
+                      Optional.of(ZonedDateTime.now()),
+                      new AtomicReference<>(null)));
+    }
     mockServerConfiguration.binaryProxyListener(new BinaryExchangeHandler(this));
+    mockServerConfiguration.http2FrameParsingActive(
+        getTigerProxyConfiguration().getActivateRbelParsingFor() != null
+            && getTigerProxyConfiguration().getActivateRbelParsingFor().contains("http2frames"));
 
     if (getTigerProxyConfiguration().getDirectReverseProxy() == null) {
       mockServer =
@@ -286,6 +303,10 @@ public class TigerProxy extends AbstractTigerProxy implements AutoCloseable, Rbe
         .forEach(remoteProxyClients::add);
 
     remoteProxyClients.parallelStream().forEach(TigerRemoteProxyClient::connect);
+  }
+
+  public boolean isConnectedToAllRemoteEndpoints() {
+    return remoteProxyClients.stream().allMatch(TigerRemoteProxyClient::isConnected);
   }
 
   @Override

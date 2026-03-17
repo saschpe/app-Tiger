@@ -33,6 +33,7 @@ import de.gematik.rbellogger.data.core.RbelFacet;
 import de.gematik.rbellogger.data.core.RbelTcpIpMessageFacet;
 import de.gematik.rbellogger.data.core.TracingMessagePairFacet;
 import de.gematik.rbellogger.facets.http.RbelHttpResponseFacet;
+import java.time.ZonedDateTime;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.Data;
@@ -62,12 +63,21 @@ public class TracingMessageFrame {
                 .getAdditionalInformation()
                 .get(RbelMessageMetadata.PREVIOUS_MESSAGE_UUID.getKey());
     if (previousMessageUuid != null) {
+      ZonedDateTime previousMessageTimestamp =
+          (ZonedDateTime)
+              message
+                  .getAdditionalInformation()
+                  .get(RbelMessageMetadata.PREVIOUS_MESSAGE_TIMESTAMP.getKey());
+
       log.atTrace()
           .addArgument(message.getTracingDto()::getMessageUuid)
           .addArgument(() -> previousMessageUuid)
           .log("Queueing {} behind {}");
       remoteProxyClient.scheduleAfterMessage(
-          previousMessageUuid, this::parseThisMessage, message.getTracingDto().getMessageUuid());
+          previousMessageUuid,
+          this::parseThisMessage,
+          message.getTracingDto().getMessageUuid(),
+          previousMessageTimestamp);
     } else {
       log.atTrace()
           .addArgument(message.getTracingDto()::getMessageUuid)

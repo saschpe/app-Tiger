@@ -32,11 +32,13 @@ import static de.gematik.test.tiger.mockserver.netty.proxy.relay.RelayConnectHan
 import static java.util.Collections.unmodifiableSet;
 
 import de.gematik.rbellogger.util.RbelSocketAddress;
+import de.gematik.test.tiger.mockserver.codec.Http2PipelineHelper;
 import de.gematik.test.tiger.mockserver.codec.MockServerHttpServerCodec;
 import de.gematik.test.tiger.mockserver.configuration.MockServerConfiguration;
 import de.gematik.test.tiger.mockserver.logging.ChannelContextLogger;
 import de.gematik.test.tiger.mockserver.mock.HttpState;
 import de.gematik.test.tiger.mockserver.mock.action.http.HttpActionHandler;
+import de.gematik.test.tiger.mockserver.model.HttpProtocol;
 import de.gematik.test.tiger.mockserver.netty.HttpRequestHandler;
 import de.gematik.test.tiger.mockserver.netty.MockServer;
 import de.gematik.test.tiger.mockserver.netty.MockServerInfiniteLoopChecker;
@@ -245,7 +247,10 @@ public class PortUnificationHandler extends ReplayingDecoder<Void> {
         contextLogger.logStage(ctx, "adding binary decoder");
         switchToBinary(ctx, msg);
       } else {
-        if (isHttp(msg)) {
+        if (isHttp2(msg)) {
+          contextLogger.logStage(ctx, "adding HTTP/2 decoders");
+          switchToHttp2(ctx, msg);
+        } else if (isHttp(msg)) {
           contextLogger.logStage(ctx, "adding HTTP decoders");
           switchToHttp(ctx, msg);
         } else if (isProxyConnected(msg)) {
@@ -301,6 +306,50 @@ public class PortUnificationHandler extends ReplayingDecoder<Void> {
         || method.startsWith("CONNECT ");
   }
 
+  /**
+   * Detects the HTTP/2 connection preface ("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"). This is sent by
+   * clients both for h2 (after TLS+ALPN) and h2c (cleartext prior-knowledge).
+   */
+  private boolean isHttp2(ByteBuf msg) {
+    if (msg.writerIndex() < 6) {
+      return false;
+    }
+    return msg.toString(msg.readerIndex(), 6, StandardCharsets.US_ASCII).startsWith("PRI * ");
+  }
+
+  private void switchToHttp2(ChannelHandlerContext ctx, ByteBuf msg) {
+    ChannelPipeline pipeline = ctx.pipeline();
+
+    // Set the protocol so the decoder knows this is HTTP/2 (needed for h2c where there's no ALPN)
+    ctx.channel().attr(SniHandler.NEGOTIATED_APPLICATION_PROTOCOL).set(HttpProtocol.HTTP_2);
+
+    Http2PipelineHelper.addHttp2Codecs(
+        pipeline,
+        true,
+        true,
+        PortUnificationHandler.class,
+        configuration.http2FrameParsingActive() ? configuration.binaryProxyListener() : null);
+
+    // TODO: make max content length configurable instead of Integer.MAX_VALUE
+    addLastIfNotPresent(pipeline, new HttpObjectAggregator(Integer.MAX_VALUE));
+    addLastIfNotPresent(
+        pipeline,
+        new MockServerHttpServerCodec(
+            configuration,
+            isSslEnabledUpstream(ctx.channel()),
+            SniHandler.retrieveClientCertificates(ctx),
+            ctx.channel().localAddress()));
+    addLastIfNotPresent(pipeline, new MessagePostProcessorAdapter());
+    addLastIfNotPresent(
+        pipeline, new HttpRequestHandler(configuration, server, httpState, actionHandler));
+    pipeline.remove(this);
+
+    ctx.channel().attr(LOCAL_HOST_HEADERS).set(getLocalAddresses(ctx));
+
+    // fire message back through pipeline
+    ctx.fireChannelRead(msg.readBytes(actualReadableBytes()));
+  }
+
   private void switchToHttp(ChannelHandlerContext ctx, ByteBuf msg) {
     ChannelPipeline pipeline = ctx.pipeline();
 
@@ -312,6 +361,7 @@ public class PortUnificationHandler extends ReplayingDecoder<Void> {
             configuration.maxChunkSize()));
     addLastIfNotPresent(pipeline, new HttpContentDecompressor());
     addLastIfNotPresent(pipeline, httpContentLengthRemover);
+    // TODO: make max content length configurable instead of Integer.MAX_VALUE
     addLastIfNotPresent(pipeline, new HttpObjectAggregator(Integer.MAX_VALUE));
     addLastIfNotPresent(
         pipeline,

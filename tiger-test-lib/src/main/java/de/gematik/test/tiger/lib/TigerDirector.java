@@ -184,6 +184,8 @@ public class TigerDirector {
 
   private static void applyLoggingLevels() {
     try {
+      TigerServerLogManager.setLoggingLevel("org.apache.directory", "OFF");
+
       TigerGlobalConfiguration.readMapWithCaseSensitiveKeys("tiger", "logging", "level")
           .forEach(TigerServerLogManager::setLoggingLevel);
     } catch (NoClassDefFoundError ncde) {
