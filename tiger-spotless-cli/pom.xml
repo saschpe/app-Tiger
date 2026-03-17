@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>de.gematik.test</groupId>
+    <artifactId>tiger</artifactId>
+    <version>4.1.18-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>tiger-spotless-cli</artifactId>
+  <name>Tiger Spotless CLI Wrapper</name>
+  <description>Lightweight CLI wrapper around spotless-lib for fast file formatting in git hooks</description>
+
+  <properties>
+    <!-- spotless-lib has different versioning from spotless-maven-plugin -->
+    <version.spotless-lib>4.3.0</version.spotless-lib>
+    <version.flexmark>0.64.8</version.flexmark>
+    <version.sortpom>4.0.0</version.sortpom>
+    <surefireJacocoAgent/>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.diffplug.spotless</groupId>
+      <artifactId>spotless-lib</artifactId>
+      <version>${version.spotless-lib}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.diffplug.spotless</groupId>
+      <artifactId>spotless-lib-extra</artifactId>
+      <version>${version.spotless-lib}</version>
+      <exclusions>
+        <!-- Exclude the solstice dependency that brings in an older org.eclipse.osgi version -->
+        <exclusion>
+          <groupId>dev.equo.ide</groupId>
+          <artifactId>solstice</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <!-- Add google-java-format dependency so we can provide it through the Provisioner -->
+    <dependency>
+      <groupId>com.google.googlejavaformat</groupId>
+      <artifactId>google-java-format</artifactId>
+      <version>${version.spotless.google-java-format}</version>
+    </dependency>
+    <!-- Add Flexmark for Markdown formatting -->
+    <dependency>
+      <groupId>com.vladsch.flexmark</groupId>
+      <artifactId>flexmark-all</artifactId>
+      <version>${version.flexmark}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.github.ekryd.sortpom</groupId>
+      <artifactId>sortpom-sorter</artifactId>
+      <version>${version.sortpom}</version>
+    </dependency>
+    <!-- Explicit dom4j dependency to ensure it's in Maven cache for sortpom provisioning -->
+    <dependency>
+      <groupId>org.dom4j</groupId>
+      <artifactId>dom4j</artifactId>
+      <version>2.2.0</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <resources>
+      <resource>
+        <filtering>true</filtering>
+        <directory>src/main/resources</directory>
+      </resource>
+    </resources>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <configuration>
+          <createDependencyReducedPom>false</createDependencyReducedPom>
+          <transformers>
+            <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+              <mainClass>de.gematik.test.tiger.spotless.cli.SpotlessCli</mainClass>
+            </transformer>
+          </transformers>
+          <filters>
+            <filter>
+              <artifact>*:*</artifact>
+              <excludes>
+                <exclude>META-INF/*.SF</exclude>
+                <exclude>META-INF/*.DSA</exclude>
+                <exclude>META-INF/*.RSA</exclude>
+                <exclude>org/dom4j/**</exclude>
+              </excludes>
+            </filter>
+          </filters>
+          <finalName>tiger-spotless-cli</finalName>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <phase>package</phase>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

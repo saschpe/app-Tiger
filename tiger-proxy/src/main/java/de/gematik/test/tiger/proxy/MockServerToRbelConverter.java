@@ -25,6 +25,7 @@ import de.gematik.rbellogger.data.RbelElement;
 import de.gematik.rbellogger.data.RbelMessageMetadata;
 import de.gematik.rbellogger.util.RbelSocketAddress;
 import de.gematik.test.tiger.mockserver.model.Header;
+import de.gematik.test.tiger.mockserver.model.HttpProtocol;
 import de.gematik.test.tiger.mockserver.model.HttpRequest;
 import de.gematik.test.tiger.mockserver.model.HttpResponse;
 import de.gematik.test.tiger.mockserver.model.SocketAddress;
@@ -147,7 +148,8 @@ public class MockServerToRbelConverter {
   }
 
   public RbelElement responseToRbelMessage(final HttpResponse response, final HttpRequest request) {
-    final byte[] httpMessage = responseToRawMessage(response);
+    final byte[] httpMessage =
+        responseToRawMessage(response, request != null ? request.getProtocol() : null);
     final RbelElement result = RbelElement.builder().rawContent(httpMessage).build();
     result.addFacet(new MockServerResponseFacet(request, response));
     return result;
@@ -161,11 +163,14 @@ public class MockServerToRbelConverter {
   }
 
   private byte[] requestToRawMessage(HttpRequest request) {
+    String httpVersion = request.getProtocol() == HttpProtocol.HTTP_2 ? "HTTP/2.0" : "HTTP/1.1";
     byte[] httpRequestHeader =
         (request.getMethod()
                 + " "
                 + getRequestUrl(request)
-                + " HTTP/1.1\r\n"
+                + " "
+                + httpVersion
+                + "\r\n"
                 + formatHeaderList(request.getHeaderList())
                 + "\r\n\r\n")
             .getBytes();
@@ -173,9 +178,11 @@ public class MockServerToRbelConverter {
     return Arrays.concatenate(httpRequestHeader, request.getBody());
   }
 
-  private byte[] responseToRawMessage(HttpResponse response) {
+  private byte[] responseToRawMessage(HttpResponse response, HttpProtocol protocol) {
+    String httpVersion = protocol == HttpProtocol.HTTP_2 ? "HTTP/2.0" : "HTTP/1.1";
     byte[] httpResponseHeader =
-        ("HTTP/1.1 "
+        (httpVersion
+                + " "
                 + response.getStatusCode()
                 + " "
                 + (response.getReasonPhrase() != null ? response.getReasonPhrase() : "")

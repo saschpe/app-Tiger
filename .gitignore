@@ -35,4 +35,4 @@ Dockerfile
 /tiger-integration-tests/
 /doc/adr/
 README_INTERNAL.md
-
+/releasenotes/

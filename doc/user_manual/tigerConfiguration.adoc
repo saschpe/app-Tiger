@@ -26,8 +26,18 @@ The following inlets are considered in the TigerGlobalConfiguration (ordered fro
 * Additional YAML-Files (`additionalConfigurationFiles:`)
 * Profile YAML-file (`tiger-<profile>.yaml`)
 * Host YAML-File (`tiger-<hostname>.yaml`)
-* Main YAML-File (`tiger.yaml`)
+* Main YAML-File (`tiger.yaml` or `tiger.yml`)
 * Internal Defaults
+
+=== Tiger YAML file resolution
+
+Tiger resolves the main configuration file as follows:
+
+. If `tiger.testenv.cfgfile` is set, that exact path is used.
+If the file does not exist Tiger fails immediately.
+. Otherwise, Tiger searches for `tiger.yaml` (preferred) or `tiger.yml` starting from the current working directory and walking upward through parent directories.
+. The upward search stops when a VCS root directory is encountered (i.e. a directory containing `.git`, `.hg`, or `.svn`).
+The VCS root itself is still checked for a tiger YAML before stopping.
 
 === Key-translation
 

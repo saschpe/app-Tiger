@@ -20,6 +20,7 @@
  */
 package de.gematik.test.tiger.proxy.client;
 
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import de.gematik.rbellogger.data.core.ProxyTransmissionHistory;
 import de.gematik.rbellogger.util.RbelSocketAddress;
 import java.util.Map;
@@ -34,7 +35,10 @@ public class TigerTracingDto {
   private final String messageUuid;
   private final RbelSocketAddress sender;
   private final RbelSocketAddress receiver;
+
+  @JsonDeserialize(using = TimestampAwareMapDeserializer.class)
   private final @Builder.Default Map<String, Object> additionalInformation = Map.of();
+
   private final Long sequenceNumber;
   private final ProxyTransmissionHistory proxyTransmissionHistory;
   private final boolean request;

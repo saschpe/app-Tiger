@@ -1,5 +1,54 @@
 # Changelog Tiger Test platform
 
+# Release 4.2.4
+
+## Features
+
+* TGR-2085: Tiger now searches upward from the working directory for `tiger.yaml` / `tiger.yml` when no
+    explicit config file location is set via `tiger.testenv.cfgfile`. The search stops at VCS root
+    directories (`.git`, `.hg`, `.svn`).
+* TGR-2087: Tiger Proxy now supports HTTP/2 traffic (both cleartext h2c and TLS with ALPN). HTTP/2 requests and
+  responses are correctly proxied in both reverse-proxy and forward-proxy (CONNECT) modes, with full
+  RBel message logging. Optional HTTP/2 frame-level parsing can be activated via
+  `activateRbelParsingFor: ["http2frames"]`, which provides structural visibility into individual
+  HTTP/2 frames (type, flags, stream ID, payload) in the RBel log and the Tiger Proxy UI.
+
+  The binary content classifier (`BinaryClassifier`) has been improved to use proper UTF-8 validation
+  instead of a naive control-character heuristic, resulting in more accurate binary vs. text detection
+  in the HTML rendering.
+* TGR-2093: Fixed URL resolution for remote Tiger Proxy connections. When a remote proxy endpoint is not
+  reachable under its configured hostname, the client now automatically resolves the hostname to its
+  IPv4 addresses and tries each candidate, falling back gracefully. Loopback addresses (e.g.
+  `127.0.0.2`) are normalized to `localhost` for the control URL to avoid connectivity issues.
+  All route, modification, and traffic API calls now use the actually connected URL rather than the
+  originally configured one.
+
+  Improved mesh proxy reconnection performance with timestamp-based detection of messages that will never
+  arrive. When a proxy restarts and reconnects to the mesh, messages referencing previous messages from before the restart
+  are now detected and processed immediately instead of waiting for timeout. This reduces message processing
+  delays from several seconds to milliseconds in restart scenarios.
+
+  Configurable thresholds with decimal precision support:
+
+  - `previousMessageTimeoutDetectionGracePeriodInSeconds` (default: 10.0) - Grace period for clock skew
+  - `previousMessageTimeoutDetectionTimeGapThresholdInSeconds` (default: 30.0) - Minimum age to trigger detection
+  - `previousMessageTimeoutDetectionRecentConnectionThresholdInMinutes` (default: 5.0) - Only applies to recent
+    connections
+
+  Most beneficial in development environments with frequent proxy restarts.
+
+## Bugfixes
+
+* TGR-2063: Suppressed noisy Apache Directory API log output (e.g., `ERR_01200_BAD_TRANSITION_FROM_STATE`) that
+  appeared during LDAP message parsing. The `org.apache.directory` logger is now programmatically set
+  to OFF during Tiger startup, ensuring these messages are silenced regardless of the consumer's
+  logback configuration.
+* TGR-2089: Fixed `externalJar` source/workingDir resolution: the `local:` source path is now resolved
+  directly (relative paths are resolved from the tiger.yaml location), regardless of `workingDir`.
+  A missing or empty `workingDir` defaults to the jar's parent directory for local sources.
+  Empty and blank `workingDir` values are now treated the same as absent.
+
+
 # Release 4.2.2
 
 ## Features
@@ -16,9 +65,6 @@
 * TGR-2063: LDAP: Suppress unnecessary log output of LDAP parsing
 * TGR-2067: LDAP: Fix rendering of fields, e.g. Message ID
 * TGR-2068: Avoid NullPointerException caused by race condition when creating a binary channel.
-
-## Bugfixes
-
 * TGR-2081: Fix of CORS bug in tracing endpoint configuration of tiger proxy.
 * TGR-2082: Fix for message retriever. It is supposed to only check the longest prefix of fully parsed messages
   available, but was given the whole history including not fully parsed messages.
@@ -296,9 +342,9 @@ package de.gematik.test.tiger.common.jexl;
 @InlineJexlMethods(namespacePrefix = "test")
 public class DummyJexlMethods {
 
-    public String testMethod() {
-        return "test";
-    }
+  public String testMethod() {
+    return "test";
+  }
 }
 ```
 
@@ -585,7 +631,7 @@ Given TGR the rbel parsing is activated for all configured parsers
     <version>3.5.2</version>
     <configuration>
         <forkedProcessExitTimeoutInSeconds>18000</forkedProcessExitTimeoutInSeconds>
-        <!-- OPTIONAL - these properties are already set to these default values. You only need to include them if you 
+        <!-- OPTIONAL - these properties are already set to these default values. You only need to include them if you
         want to change the default value -->
         <systemPropertyVariables>
             <tiger.features>src/test/resources/features</tiger.features>
@@ -600,7 +646,7 @@ Given TGR the rbel parsing is activated for all configured parsers
             <groupId>de.gematik.test</groupId>
             <artifactId>tiger-failsafe-provider</artifactId>
             <version>3.7.7-SNAPSHOT</version>
-            <!-- OPTIONAL if there is a dependency on your classpath bringing the groovy-xml library transitively, you need to 
+            <!-- OPTIONAL if there is a dependency on your classpath bringing the groovy-xml library transitively, you need to
             exclude it, so that there are no conflicts in the loaded versions -->
             <exclusions>
                 <exclusion>
@@ -985,7 +1031,7 @@ If you do not use a custom template, no action is necessary.
 
 ```yaml
 lib:
-  enableTestManagementRestApi: true 
+  enableTestManagementRestApi: true
 ```
 
 * TIMTS-658: default poll interval for waiting for external servers to be healthy is increased to
@@ -1489,7 +1535,7 @@ Given TGR the custom failure message is set to {tigerResolvedString}
 Gegebensei TGR die benutzerdefinierte Fehlermeldung ist auf {tigerResolvedString} gesetzt
 [...]
 Then TGR clear the custom failure message
-Dann TGR lösche die benutzerdefinierte Fehlermeldung 
+Dann TGR lösche die benutzerdefinierte Fehlermeldung
 ```
 
 * TGR-1198: Tiger-Test-Lib: a new inline method `rbel:encodeAs` can be used to explicitly encode a
@@ -1764,7 +1810,7 @@ copyFiles:
   - sourcePath: ./example/path/file_to_copy.txt
     destinationPath: /path/in/container/file_to_copy.txt
     fileMode: 0633
-``` 
+```
 
 ## Bugfixes
 
@@ -2364,7 +2410,7 @@ tigerProxy:
    |  └──dataParts (<null>)
    |     └──0 (<null>) (RbelMtomDataPartFacet)
    |        ├──xpath (/SOAP-ENV:Envelope/SOAP-ENV:Body/ns4:SignDocument/...) (RbelValueFacet)
-   |        └──content (%PDF-1.6\r\n%????\r\n1361 0 obj\r\n<</Linearized 1...) (RbelBinaryFacet) 
+   |        └──content (%PDF-1.6\r\n%????\r\n1361 0 obj\r\n<</Linearized 1...) (RbelBinaryFacet)
 
 ```
 
@@ -3362,7 +3408,7 @@ affected at all.
 ## Entfernt
 
 * TGR-173 Die Ausgabe der Testschritte erfolgt nun nicht mehr über Tiger, sondern kann
-  im [serenity.properties](https://serenity-bdd.github.io/theserenitybook/latest/serenity-system-properties.html)  
+  im [serenity.properties](https://serenity-bdd.github.io/theserenitybook/latest/serenity-system-properties.html)
   über serenity.logging=VERBOSE aktiviert werden.
 
 ## Fehlerbehebungen
@@ -3396,7 +3442,7 @@ servers:
     #
     type: docker
     ...
-    active: false  
+    active: false
 ```
 
 -------

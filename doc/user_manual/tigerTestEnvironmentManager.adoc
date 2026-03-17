@@ -18,8 +18,9 @@ It then loads further yaml-files:
 * `tiger-$+{hostname}+.yaml` and `tiger-$+{hostname}+.yml` are read and give the possibility to make computer-dependent configuration.
 The hostname is the name of your own computer in the network (on Windows-machines typically the computername).
 * `tiger-$+{profile}+.yaml` is read if the system property `profile` or the environment variable `PROFILE` is set.
-The file needs to be located in the same folder as the `tiger.yaml` file. Additionaly, you can configure in the tiger
-configuration a default profile which will be loaded when none is set via environment variable or system property. See xref:tigerTestLibrary.adoc#_tiger_test_lib_configuration[here] for more details.
+The file needs to be located in the same folder as the `tiger.yaml` file.
+Additionaly, you can configure in the tiger configuration a default profile which will be loaded when none is set via environment variable or system property.
+See xref:tigerTestLibrary.adoc#_tiger_test_lib_configuration[here] for more details.
 * The list given under `tiger.additionalYamls` is read.
 Each list-entry has two properties:
 ** `filename` pointing to the file to be read.
@@ -436,16 +437,19 @@ Any Jar archive executable which can be started with the `java -jar` command can
 
 The options list are arguments added immediately after the java executable, while the arguments list is appended after the -jar argument.
 
-The working directory is the place where the jar file is downloaded to and executed from.
+The working directory is the place where the jar is executed from.
 So if your jar archive expects some configuration files make sure to choose the folder appropriately.
+
+If `workingDir` is not set, Tiger defaults to the parent directory of the jar file for `local:` sources, or the OS temp folder for downloaded jars.
+
+Relative paths for both `source` and `workingDir` are resolved relative to the location of the main `tiger.yaml` file.
 
 If using the `local:` prefix you can also use wildcards to find any matching jar-files.
 Tiger will use the following order to try to find a matching file:
 
-- In the working directory a file with the filename contained in the source
-- From the working directory a file with a relative path equal to the source
-- In the working directory a file with a filename matching the source (eg. `app-*.jar`)
-- From the working directory a file with a relative path equal and matching the filename of the source (eg. `../target/app-*.jar`)
+- The path given in `source` directly (absolute, or resolved from the tiger.yaml location if relative)
+- In the working directory, a file whose name matches the filename part of the source (fallback for bare filenames)
+- In the working directory, a file whose name matches a wildcard pattern in the source (eg. `app-*.jar`)
 
 [source,shell script]
 ----
@@ -482,12 +486,10 @@ servers:
 
       externalJarOptions:
         # OPTIONAL folder from where to start the external jar.
-        # The downloaded jar file will be stored and executed from here
-        # The default value is empty, which means that the operating-system-specific
-        # temporary folder will be used.
-        # hint: when the jar file is taken from a local directory and is set in source
-        # and the workingDir is set then the workingDir has to be the directory where
-        # the jar file is located
+        # If not set, Tiger defaults to the parent directory of the jar file (for local: sources)
+        # or the OS temp folder (for downloaded jars).
+        # Relative paths are resolved relative to the location of the tiger.yaml file.
+        # A non-existent directory is created automatically.
         workingDir: /home/user/test/myspecificjar
         # OPTIONAL Options to pass in to the java executable call.
         options: []

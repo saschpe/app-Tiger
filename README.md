@@ -105,3 +105,26 @@ This software is currently being tested to ensure its technical quality and lega
 valued.
 If you find any issues or have any suggestions or comments, or if you see any other ways in which we can improve, please
 reach out to: tiger@gematik.de
+
+## Git Hooks Setup
+
+This project uses version-controlled git hooks located in the `githooks/` directory. To install them locally, run:
+
+```
+sh githooks/setup-git-hooks.sh
+```
+
+This will copy the hooks to your `.git/hooks/` directory and make them executable. Always re-run this script after
+pulling changes to the hooks.
+
+### What the hooks do
+
+- The `pre-commit` hook runs the Tiger Spotless CLI and frontend linters on staged files, auto-fixing and re-staging
+  only the previously staged files before each commit. This ensures all committed code is formatted and linted while
+  preserving your working tree state.
+- The `pre-push` hook is minimal (currently a no-op) and allows push operations to proceed normally.
+
+The Tiger Spotless CLI provides fast formatting without Maven startup overhead. The first run may build the CLI jar (
+one-time setup), but subsequent runs are nearly instantaneous.
+
+See `githooks/README.md` for more details.

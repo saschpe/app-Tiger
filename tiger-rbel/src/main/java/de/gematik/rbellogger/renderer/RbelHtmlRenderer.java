@@ -24,6 +24,7 @@ import static de.gematik.rbellogger.util.MemoryConstants.MB;
 import static j2html.TagCreator.*;
 
 import de.gematik.rbellogger.data.RbelElement;
+import de.gematik.rbellogger.data.core.RbelBinaryFacet;
 import de.gematik.rbellogger.util.BinaryClassifier;
 import de.gematik.rbellogger.util.RbelValueShader;
 import j2html.tags.ContainerTag;
@@ -164,7 +165,8 @@ public class RbelHtmlRenderer {
   private static String printRawContentOfElement(
       final RbelElement el, final RbelHtmlRenderingToolkit renderingToolkit) {
     if (renderingToolkit.shouldRenderEntitiesWithSize(el.getSize())) {
-      if (BinaryClassifier.isBinary(el.getContent().toInputStream())) {
+      if (el.hasFacet(RbelBinaryFacet.class)
+          || BinaryClassifier.isBinary(el.getContent().toInputStream())) {
         return Hex.toHexString(el.getRawContent());
       } else {
         return el.getRawStringContent();

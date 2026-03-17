@@ -86,6 +86,7 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<HttpRequest>
 
       if (!httpState.handle(request)) {
         if (request.getMethod().equals("CONNECT")) {
+          configuration.connectMessageLogger().accept(request);
           openProxyChannel(ctx, request);
         } else {
           httpActionHandler.processAction(

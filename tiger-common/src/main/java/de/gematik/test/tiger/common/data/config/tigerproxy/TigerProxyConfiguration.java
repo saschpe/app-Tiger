@@ -61,6 +61,12 @@ public class TigerProxyConfiguration {
   @Builder.Default private int maximumPartialMessageAgeInSeconds = 300;
   @Builder.Default private int connectionTimeoutInSeconds = 10;
   @Builder.Default private float waitForPreviousMessageBeforeParsingInSeconds = 5;
+  @Builder.Default private float previousMessageTimeoutDetectionGracePeriodInSeconds = 10;
+  @Builder.Default private float previousMessageTimeoutDetectionTimeGapThresholdInSeconds = 30;
+
+  @Builder.Default
+  private float previousMessageTimeoutDetectionRecentConnectionThresholdInMinutes = 5;
+
   @Builder.Default private int stompClientBufferSizeInMb = 1;
   @Builder.Default private int perMessageBufferSizeInMb = 100;
   @Builder.Default private int rbelBufferSizeInMb = 1024;
@@ -73,6 +79,7 @@ public class TigerProxyConfiguration {
   @Builder.Default private boolean rewriteHostHeader = false;
   @Builder.Default private boolean rewriteLocationHeader = true;
   @Builder.Default private boolean activateTrafficLogging = true;
+  @Builder.Default private boolean logConnectMessages = false;
   @Builder.Default private List<TigerProxyNoteCommand> notes = new ArrayList<>();
 
   @Builder.Default

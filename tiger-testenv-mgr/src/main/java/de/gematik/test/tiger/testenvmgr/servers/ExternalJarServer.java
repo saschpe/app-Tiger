@@ -35,7 +35,6 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -43,6 +42,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import lombok.Builder;
 import lombok.SneakyThrows;
+import org.apache.commons.lang3.StringUtils;
 import org.slf4j.event.Level;
 
 @TigerServerType("externalJar")
@@ -77,17 +77,11 @@ public class ExternalJarServer extends AbstractExternalTigerServer {
       getConfiguration().setExternalJarOptions(new CfgExternalJarOptions());
     } else {
       folder = getConfiguration().getExternalJarOptions().getWorkingDir();
-      if (folder == null) {
+      if (StringUtils.isBlank(folder)) {
         if (getConfiguration().getSource().get(0).startsWith(LOCAL)) {
           final String jarPath = getConfiguration().getSource().get(0).split(LOCAL)[1];
-          folder = Paths.get(jarPath).toAbsolutePath().getParent().toString();
-          if (jarPath.contains("/")) {
-            getConfiguration()
-                .getSource()
-                .add(0, LOCAL + jarPath.substring(jarPath.lastIndexOf('/')));
-          } else {
-            getConfiguration().getSource().add(0, LOCAL + jarPath);
-          }
+          final Path resolvedJar = TigerGlobalConfiguration.resolveRelativePathToTigerYaml(jarPath);
+          folder = resolvedJar.getParent().toString();
           log.info(
               "Defaulting to parent folder '{}' as working directory for server {}",
               folder,
@@ -119,12 +113,7 @@ public class ExternalJarServer extends AbstractExternalTigerServer {
     final CfgExternalJarOptions externalJarOptions = getConfiguration().getExternalJarOptions();
     if (externalJarOptions != null) {
       String workingDirStr = getConfiguration().getExternalJarOptions().getWorkingDir();
-      Path workingDirPath = Paths.get(workingDirStr);
-      if (!workingDirPath.isAbsolute()) {
-        workingDir = TigerGlobalConfiguration.resolveRelativePathToTigerYaml(workingDirStr);
-      } else {
-        workingDir = workingDirPath;
-      }
+      workingDir = TigerGlobalConfiguration.resolveRelativePathToTigerYaml(workingDirStr);
     } else {
       workingDir = TigerGlobalConfiguration.resolveRelativePathToTigerYaml(".");
     }

@@ -57,6 +57,8 @@ class TestTigerProxyLegacyTraffic {
         val currentProxy = givenCurrentProxyConfiguredForLegacyTraffic(oldProxyContainer);
         val unirestProxied = givenUnirestClientConfiguredForOldProxy(oldProxyContainer); ) {
 
+      await().atMost(20, TimeUnit.SECONDS).until(currentProxy::isConnectedToAllRemoteEndpoints);
+
       val response = unirestProxied.get("http://www.example.com").asString();
 
       assertThat(response.getStatus()).isEqualTo(200);

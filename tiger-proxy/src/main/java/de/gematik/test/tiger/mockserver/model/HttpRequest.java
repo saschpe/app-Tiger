@@ -269,8 +269,8 @@ public class HttpRequest extends HttpMessage<HttpRequest> {
                   path,
                   headers);
               return new IllegalArgumentException(
-                  "Host header must be provided to determine remote socket address, the request does not"
-                      + " include the \"Host\" header:"
+                  "Host header must be provided to determine remote socket address, the request"
+                      + " does not include the \"Host\" header:"
                       + NEW_LINE
                       + this);
             });

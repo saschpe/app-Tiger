@@ -1,0 +1,62 @@
+#!/bin/bash
+
+# Always run all steps; don't exit on first error.
+set -u
+
+FAILED=0
+
+# Snapshot the staged file list once.
+STAGED_LIST_FILE="$(mktemp -t tiger-precommit-staged.XXXXXX)"
+# Files that still exist (avoid formatting/linting deleted paths).
+STAGED_EXISTING_FILE="$(mktemp -t tiger-precommit-existing.XXXXXX)"
+trap 'rm -f "$STAGED_LIST_FILE" "$STAGED_EXISTING_FILE" >/dev/null 2>&1 || true' EXIT
+
+git diff --cached --name-only >"$STAGED_LIST_FILE"
+git diff --cached --name-only --diff-filter=ACMR >"$STAGED_EXISTING_FILE"
+
+# Validate changelog fragments being committed
+if grep -q '^releasenotes/unreleased/.*\.md$' "$STAGED_EXISTING_FILE" 2>/dev/null; then
+    echo "Validating changelog fragments..."
+    kotlinc -script releasenotes/scripts/compile-release-notes.main.kts -- --validate || FAILED=1
+fi
+
+restage_previously_staged() {
+  local failed=0
+  if [ -s "$STAGED_EXISTING_FILE" ]; then
+    git add --pathspec-from-file="$STAGED_EXISTING_FILE" -- || failed=1
+  fi
+  return $failed
+}
+
+# Run Spotless formatting only on changed files before commit
+if [ -s "$STAGED_EXISTING_FILE" ]; then
+  ./githooks/spotless-changed.sh $(cat "$STAGED_EXISTING_FILE") || FAILED=1
+fi
+
+# Array of frontend module paths to lint (expand as needed)
+FRONTEND_MODULES=(
+  "tiger-testenv-mgr/src/frontend"
+  "tiger-proxy-scrollable-webui/src/frontend"
+)
+
+for MODULE_PATH in "${FRONTEND_MODULES[@]}"; do
+  # Create a temporary file for the changed files in the current module
+  CHANGED_IN_MODULE_FILE="$(mktemp -t tiger-precommit-module.XXXXXX)"
+  trap 'rm -f "$CHANGED_IN_MODULE_FILE" >/dev/null 2>&1 || true' EXIT
+
+  grep "^$MODULE_PATH" "$STAGED_EXISTING_FILE" | sed "s#^$MODULE_PATH/##" > "$CHANGED_IN_MODULE_FILE" || true
+
+  if [ -s "$CHANGED_IN_MODULE_FILE" ]; then
+    files=$(cat "$CHANGED_IN_MODULE_FILE")
+    (
+      cd "$MODULE_PATH" && npx eslint --fix $files
+    ) || FAILED=1
+  fi
+done
+
+# Always restage at the end so we don't stage other files.
+restage_previously_staged || FAILED=1
+
+./githooks/check-branch-name.sh || FAILED=1
+
+exit $FAILED

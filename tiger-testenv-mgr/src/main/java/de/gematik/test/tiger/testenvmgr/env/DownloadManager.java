@@ -21,13 +21,13 @@
 package de.gematik.test.tiger.testenvmgr.env;
 
 import com.google.common.util.concurrent.Monitor;
+import de.gematik.test.tiger.common.config.TigerGlobalConfiguration;
 import de.gematik.test.tiger.common.util.TigerSerializationUtil;
 import de.gematik.test.tiger.testenvmgr.exceptions.TigerDownloadManagerException;
 import de.gematik.test.tiger.testenvmgr.servers.ExternalJarServer;
 import de.gematik.test.tiger.testenvmgr.util.TigerEnvironmentStartupException;
 import de.gematik.test.tiger.testenvmgr.util.TigerTestEnvException;
 import java.io.File;
-import java.io.FilenameFilter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -195,10 +195,8 @@ public class DownloadManager {
       ExternalJarServer externalJarServer, String jarUrl, Path workingDir) {
     final String localJarString = jarUrl.replaceFirst("local:", "");
     final String jarFileName = getFileNameFromPath(localJarString);
-    Optional<String> jarFileFiltered = Optional.of(jarFileName).filter(file -> !file.contains("*"));
-    Optional<String> localJarFiltered =
-        Optional.of(localJarString).filter(file -> !file.contains("*"));
-    ThrowingFunction<Path, Stream<Path>> relativeJarResolver =
+
+    ThrowingFunction<Path, Stream<Path>> wildcardResolver =
         dir ->
             Files.find(
                 dir,
@@ -208,29 +206,36 @@ public class DownloadManager {
                         .setWildcards(jarFileName)
                         .get()
                         .accept(p.toFile()));
+
     List<Supplier<Optional<File>>> candidateFileSuppliers =
         List.of(
-            () -> jarFileFiltered.map(filename -> workingDir.resolve(filename).toFile()),
-            () -> localJarFiltered.map(filename -> workingDir.resolve(filename).toFile()),
+            // 1. resolve the local: path directly, relative to tiger-yaml location
+            () -> {
+              Path sourcePath =
+                  TigerGlobalConfiguration.resolveRelativePathToTigerYaml(localJarString);
+              return Optional.of(sourcePath.toFile()).filter(File::exists);
+            },
+            // 2. filename (or wildcard) relative to workingDir – fallback for simple names
             () ->
-                Optional.ofNullable(
-                        workingDir
-                            .toFile()
-                            .listFiles(
-                                (FilenameFilter)
-                                    WildcardFileFilter.builder().setWildcards(jarFileName).get()))
-                    .filter(ar -> ar.length > 0)
-                    .map(ar -> ar[0]),
+                Optional.of(jarFileName)
+                    .filter(f -> !f.contains("*"))
+                    .map(filename -> workingDir.resolve(filename).toFile())
+                    .filter(File::exists),
+            // 3. wildcard match inside workingDir
             () ->
-                Optional.of(getParentFolderFromPath(localJarString))
-                    .map(Path::of)
-                    .map(workingDir::resolve)
-                    .filter(p -> p.toFile().exists())
-                    .stream()
-                    .flatMap(relativeJarResolver)
-                    .findFirst()
+                Optional.of(jarFileName).filter(f -> f.contains("*")).stream()
+                    .flatMap(
+                        ignored -> {
+                          try {
+                            return wildcardResolver.apply(workingDir);
+                          } catch (Exception e) {
+                            return Stream.empty();
+                          }
+                        })
                     .map(Path::toFile)
-                    .filter(File::exists));
+                    .filter(File::exists)
+                    .findFirst());
+
     var jarFile =
         candidateFileSuppliers.stream()
             .map(Supplier::get)
@@ -261,18 +266,6 @@ public class DownloadManager {
     }
     final String[] splits = value.split("/");
     return splits[splits.length - 1];
-  }
-
-  private static String getParentFolderFromPath(String value) {
-    if (StringUtils.isEmpty(value)) {
-      return value;
-    }
-    final int pathCutoffPosition = value.lastIndexOf("/");
-    if (pathCutoffPosition < 0) {
-      return value;
-    } else {
-      return value.substring(0, pathCutoffPosition);
-    }
   }
 
   @SneakyThrows
