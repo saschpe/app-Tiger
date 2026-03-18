@@ -205,7 +205,8 @@ class TigerRemoteProxyClientSchedulingAdditionalTest {
 
   @Test
   @DisplayName(
-      "Immediate execution when previous message timestamp predates connection (mesh/reconnection scenario)")
+      "Immediate execution when previous message timestamp predates connection (mesh/reconnection"
+          + " scenario)")
   void scheduleAfterMessage_previousMessageFromOldConnection_executesImmediately()
       throws Exception {
     client = newClient(5000); // long timeout to prove we don't wait for it
@@ -285,7 +286,8 @@ class TigerRemoteProxyClientSchedulingAdditionalTest {
 
     assertThat(latch.await(200, TimeUnit.MILLISECONDS))
         .as(
-            "Task should execute immediately due to time gap detection (old message + recent connection)")
+            "Task should execute immediately due to time gap detection (old message + recent"
+                + " connection)")
         .isTrue();
   }
 

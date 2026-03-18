@@ -213,7 +213,32 @@ public class TigerRemoteProxyClient extends AbstractTigerProxy implements AutoCl
   }
 
   private void downloadTrafficFromRemoteProxy() {
+    discardIncompletePartialMessages();
     new TigerRemoteTrafficDownloader(this).execute();
+  }
+
+  /**
+   * Removes any partially-received (incomplete) messages from the in-flight map and unregisters
+   * their UUIDs, so that the traffic downloader is allowed to re-fetch the full messages from the
+   * remote proxy's HTTP endpoint. Without this, a UUID that was partially received over WebSocket
+   * before the session was killed would be silently skipped during the download.
+   */
+  private void discardIncompletePartialMessages() {
+    synchronized (partiallyReceivedMessageMap) {
+      partiallyReceivedMessageMap
+          .entrySet()
+          .removeIf(
+              entry -> {
+                if (!entry.getValue().isComplete()) {
+                  log.atDebug()
+                      .addArgument(entry::getKey)
+                      .log("Discarding incomplete partial message {} before traffic download");
+                  getRbelLogger().getRbelConverter().getKnownMessageUuids().remove(entry.getKey());
+                  return true;
+                }
+                return false;
+              });
+    }
   }
 
   void connectToRemoteUrl(
