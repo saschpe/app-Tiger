@@ -1,5 +1,12 @@
 # Changelog Tiger Test platform
 
+# Release 4.2.5
+
+## Bugfixes
+
+* TGR-2093: Tigerproxy mesh-setup: fixed a bug that prevented download of partially received messages after connection loss.
+
+
 # Release 4.2.4
 
 ## Features
